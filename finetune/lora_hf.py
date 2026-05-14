@@ -29,35 +29,61 @@ from .lora import LoRALinear  # reuse the same LoRALinear (zero-init B)
 DEFAULT_HF_TARGETS = ("q_proj", "v_proj")
 
 
+def _find_blocks(module: nn.Module, _depth: int = 0, _max_depth: int = 3):
+    """
+    Recursively look for a ModuleList/Sequential of transformer blocks
+    inside `module`. A "block" is heuristically identified as having
+    `attention` or `attn` sub-module.
+
+    Returns (prefix, blocks) or None.
+    """
+    # Direct hit on common attribute names.
+    for attr in ("layer", "layers", "blocks", "encoder"):
+        m = getattr(module, attr, None)
+        if m is None:
+            continue
+        if isinstance(m, (nn.ModuleList, nn.Sequential)) and len(m) > 0:
+            first = m[0]
+            if hasattr(first, "attention") or hasattr(first, "attn"):
+                return attr, m
+        # Could be a wrapper that itself contains `.layer`
+        if hasattr(m, "layer"):
+            inner = getattr(m, "layer")
+            if isinstance(inner, (nn.ModuleList, nn.Sequential)) and len(inner) > 0:
+                first = inner[0]
+                if hasattr(first, "attention") or hasattr(first, "attn"):
+                    return f"{attr}.layer", inner
+
+    # Recurse into named children (handles e.g. hf_model.model.layer
+    # in newer transformers versions of Dinov3ViTModel).
+    if _depth < _max_depth:
+        for cname, child in module.named_children():
+            res = _find_blocks(child, _depth + 1, _max_depth)
+            if res is not None:
+                prefix, blocks = res
+                return f"{cname}.{prefix}", blocks
+    return None
+
+
 def _iter_attention_modules(hf_model: nn.Module):
     """
     Yield (name, attention_module) for every transformer block in a HF
     DINOv3 model.
 
-    HF stores blocks as `model.layer[i].attention` where `attention` has
-    `q_proj`, `k_proj`, `v_proj`, `o_proj` linears.
+    Different transformers versions wrap the blocks at different depths:
+      - older: `hf_model.layer[i].attention`
+      - newer: `hf_model.model.layer[i].attention`
+    We walk the module tree to find them.
     """
-    # Common access paths across transformers versions.
-    candidates = []
-    for attr in ["layer", "encoder", "blocks"]:
-        m = getattr(hf_model, attr, None)
-        if m is not None and isinstance(m, (nn.ModuleList, nn.Sequential)):
-            candidates.append((attr, m))
-        # Some HF models nest as model.encoder.layer
-        if m is not None and hasattr(m, "layer"):
-            inner = getattr(m, "layer")
-            if isinstance(inner, (nn.ModuleList, nn.Sequential)):
-                candidates.append((f"{attr}.layer", inner))
-
-    if not candidates:
+    found = _find_blocks(hf_model)
+    if found is None:
         raise RuntimeError(
             "Could not find a ModuleList of transformer blocks on the "
             "given HF model. Available attrs: "
             f"{[n for n, _ in hf_model.named_children()]}"
         )
 
-    # Prefer the first plausible one (HF Dinov3ViTModel exposes `.layer`).
-    prefix, blocks = candidates[0]
+    prefix, blocks = found
     for i, block in enumerate(blocks):
         if hasattr(block, "attention"):
             yield f"{prefix}.{i}.attention", block.attention
