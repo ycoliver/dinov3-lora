@@ -253,8 +253,10 @@ def resolve_csv_path(input_csv_dir, csv_index, pair_id):
         input_csv_dir / '{}_score_matrix.csv'.format(pair_id),
     ]
     for candidate in candidates:
-        import os
-        safe_path = "\\\\?\\" + str(candidate.resolve())
+        import os, sys
+        resolved = str(candidate.resolve())
+        # Windows long-path prefix; harmless to skip on POSIX.
+        safe_path = ("\\\\?\\" + resolved) if sys.platform.startswith("win") else resolved
         if os.path.exists(safe_path):
             return candidate
 
@@ -278,7 +280,10 @@ def load_csv_matches(csv_path):
     scores = []
     total_rows = 0
 
-    with open("\\\\?\\" + str(csv_path.resolve()), 'r', newline='') as handle:
+    import sys as _sys
+    _resolved = str(csv_path.resolve())
+    _open_path = ("\\\\?\\" + _resolved) if _sys.platform.startswith("win") else _resolved
+    with open(_open_path, 'r', newline='') as handle:
         reader = csv.DictReader(handle)
         fieldnames = reader.fieldnames
         if fieldnames is None:

@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# =====================================================================
+#  One-click LoRA fine-tune + evaluation pipeline for DINOv3 (HF / ViT-B)
+#
+#  Pipeline:
+#    [1] Install Python deps (transformers, safetensors)
+#    [2] Zero-shot feature extraction + MNN matching       (baseline)
+#    [3] Zero-shot evaluation                              (baseline metrics)
+#    [4] LoRA fine-tune                                    (training)
+#    [5] Fine-tuned feature extraction + MNN matching
+#    [6] Fine-tuned evaluation                             (final metrics)
+#
+#  All produced metrics live under `evaluate/<dataset>_(hf|hf_lora)/`,
+#  drop-in compatible with the existing zero-shot folders.
+#
+#  Usage:
+#    bash scripts/train_oneclick.sh              # default = navi
+#    bash scripts/train_oneclick.sh navi
+#    bash scripts/train_oneclick.sh scannet
+#    bash scripts/train_oneclick.sh navi 5       # only run 5 epochs
+# =====================================================================
+set -euo pipefail
+
+DATASET=${1:-navi}
+EPOCHS=${2:-15}
+
+# In tiny mode we override epochs to a small value if user didn't pass one.
+if [ "$DATASET" = "tiny" ] && [ -z "${2:-}" ]; then
+    EPOCHS=2
+fi
+
+# ---------------------------------------------------------------------
+#  Paths (edit only if your layout differs)
+# ---------------------------------------------------------------------
+PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$PROJECT_ROOT"
+
+WEIGHTS_DIR="dinov3_weights"
+IMG_SIZE=448
+BATCH_SIZE=1
+LR=1e-3
+LORA_RANK=4
+LORA_ALPHA=1.0
+
+# Per-dataset settings
+case "$DATASET" in
+  tiny)
+    # Synthetic pipeline-smoke dataset. Auto-generated below.
+    TRAIN_PAIRS="datasets/tiny/pairs.txt"
+    EVAL_PAIRS="datasets/tiny/pairs.txt"
+    DATA_ROOT="datasets/tiny"
+    DEPTH_ROOT=""
+    IMG_SIZE=480
+    EVAL_W=480
+    EVAL_H=480
+    ;;
+  navi)
+    TRAIN_PAIRS="finetune/navi_train_pairs.txt"
+    EVAL_PAIRS="datasets/navi_with_gt.txt"
+    DATA_ROOT="datasets/navi_resized"
+    DEPTH_ROOT=""
+    EVAL_W=1024
+    EVAL_H=1024
+    ;;
+  navi_mini)
+    TRAIN_PAIRS="finetune/navi_train_pairs_mini.txt"
+    EVAL_PAIRS="datasets/navi_with_gt.txt"
+    DATA_ROOT="datasets/navi_resized"
+    DEPTH_ROOT=""
+    EVAL_W=1024
+    EVAL_H=1024
+    ;;
+  scannet)
+    TRAIN_PAIRS="finetune/scannet_train_mini.txt"
+    EVAL_PAIRS="datasets/scannet_with_gt.txt"
+    DATA_ROOT="datasets/scannet"
+    DEPTH_ROOT="datasets/scannet"
+    EVAL_W=640
+    EVAL_H=480
+    ;;
+  *)
+    echo "Unknown DATASET '$DATASET'. Choose: tiny | navi | navi_mini | scannet"
+    exit 1
+    ;;
+esac
+
+OUT_LORA="finetune_output_lora_hf_${DATASET}"
+MNN_ZS="mnn_matching_hf/${DATASET}"
+MNN_FT="mnn_matching_lora_hf/${DATASET}"
+EVAL_ZS="evaluate/${DATASET}_hf"
+EVAL_FT="evaluate/${DATASET}_hf_lora"
+
+echo "===================================================================="
+echo "  DINOv3 LoRA-HF one-click pipeline"
+echo "  Dataset      : $DATASET"
+echo "  Train pairs  : $TRAIN_PAIRS"
+echo "  Eval pairs   : $EVAL_PAIRS"
+echo "  Data root    : $DATA_ROOT"
+echo "  Weights dir  : $WEIGHTS_DIR"
+echo "  Epochs       : $EPOCHS"
+echo "  Img size     : $IMG_SIZE"
+echo "  LoRA rank    : $LORA_RANK"
+echo "===================================================================="
+
+# ---------------------------------------------------------------------
+#  Auto-activate project-local .venv (built by scripts/setup_env.sh)
+# ---------------------------------------------------------------------
+VENV_DIR="$PROJECT_ROOT/.venv"
+if [ -d "$VENV_DIR" ]; then
+    # shellcheck source=/dev/null
+    source "$VENV_DIR/bin/activate"
+    echo "[env] Activated venv: $VENV_DIR"
+elif command -v python >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
+    echo "[env] No local .venv found at $VENV_DIR."
+    echo "      Recommended: bash scripts/setup_env.sh"
+    echo "      Falling back to system Python — packages may be missing."
+fi
+PY=$(command -v python || command -v python3)
+echo "[env] Python: $($PY --version 2>&1) ($PY)"
+
+# ---------------------------------------------------------------------
+#  Step 1 — verify deps (do NOT silently install; user runs setup_env.sh)
+# ---------------------------------------------------------------------
+echo ""
+echo "[1/6] Verifying Python deps..."
+$PY - <<'PY'
+import importlib, sys
+need = ["torch", "torchvision", "transformers", "safetensors",
+        "numpy", "cv2", "PIL"]
+missing = []
+for m in need:
+    try:
+        mod = importlib.import_module(m)
+        v = getattr(mod, "__version__", "?")
+        print(f"  ok  {m:14s} {v}")
+    except Exception as e:
+        missing.append(m)
+        print(f"  MISS {m:14s} ({e.__class__.__name__})")
+if missing:
+    print(f"\nMissing modules: {missing}")
+    print("Run: bash scripts/setup_env.sh")
+    sys.exit(1)
+PY
+
+# ---------------------------------------------------------------------
+#  Step 1.5 — auto-generate tiny synthetic dataset if needed
+# ---------------------------------------------------------------------
+if [ "$DATASET" = "tiny" ]; then
+    if [ ! -f "$TRAIN_PAIRS" ]; then
+        echo ""
+        echo "[1.5] Generating tiny synthetic dataset → $DATA_ROOT/"
+        $PY scripts/make_tiny_dataset.py \
+            --out "$DATA_ROOT" \
+            --num_pairs 8 \
+            --img_size "$IMG_SIZE"
+    else
+        echo "[1.5] Reusing existing tiny dataset at $DATA_ROOT/"
+    fi
+fi
+
+# ---------------------------------------------------------------------
+#  Step 2 — zero-shot extraction + MNN matching
+# ---------------------------------------------------------------------
+echo ""
+echo "[2/6] Zero-shot feature extraction + MNN matching → $MNN_ZS"
+$PY -m finetune.extract_and_match_hf \
+    --weights_dir "$WEIGHTS_DIR" \
+    --pairs "$EVAL_PAIRS" \
+    --data_root "$DATA_ROOT" \
+    --output_dir "$MNN_ZS" \
+    --img_size "$IMG_SIZE" \
+    --eval_resize "$EVAL_W" "$EVAL_H"
+
+# ---------------------------------------------------------------------
+#  Step 3 — zero-shot evaluation
+# ---------------------------------------------------------------------
+echo ""
+echo "[3/6] Zero-shot evaluation → $EVAL_ZS"
+mkdir -p "$EVAL_ZS"
+$PY evaluate/evaluate_csv_essential.py \
+    --input_pairs "$EVAL_PAIRS" \
+    --input_dir "$DATA_ROOT" \
+    --input_csv_dir "$MNN_ZS" \
+    --output_dir "$EVAL_ZS" \
+    --resize "$EVAL_W" "$EVAL_H" || \
+    echo "  (evaluate script returned non-zero — inspect $EVAL_ZS)"
+
+# ---------------------------------------------------------------------
+#  Step 4 — LoRA fine-tune
+# ---------------------------------------------------------------------
+echo ""
+echo "[4/6] LoRA fine-tuning → $OUT_LORA"
+$PY -m finetune.train_lora_hf \
+    --weights_dir "$WEIGHTS_DIR" \
+    --train_pairs "$TRAIN_PAIRS" \
+    --data_root "$DATA_ROOT" \
+    --depth_root "$DEPTH_ROOT" \
+    --output_dir "$OUT_LORA" \
+    --epochs "$EPOCHS" \
+    --batch_size "$BATCH_SIZE" \
+    --lr "$LR" \
+    --img_size "$IMG_SIZE" \
+    --lora_rank "$LORA_RANK" \
+    --lora_alpha "$LORA_ALPHA"
+
+CKPT="$OUT_LORA/checkpoint_latest.pth"
+
+# ---------------------------------------------------------------------
+#  Step 5 — fine-tuned extraction + MNN matching
+# ---------------------------------------------------------------------
+echo ""
+echo "[5/6] Fine-tuned feature extraction → $MNN_FT"
+$PY -m finetune.extract_and_match_hf \
+    --weights_dir "$WEIGHTS_DIR" \
+    --checkpoint "$CKPT" \
+    --lora_rank "$LORA_RANK" \
+    --lora_alpha "$LORA_ALPHA" \
+    --pairs "$EVAL_PAIRS" \
+    --data_root "$DATA_ROOT" \
+    --output_dir "$MNN_FT" \
+    --img_size "$IMG_SIZE" \
+    --eval_resize "$EVAL_W" "$EVAL_H"
+
+# ---------------------------------------------------------------------
+#  Step 6 — fine-tuned evaluation
+# ---------------------------------------------------------------------
+echo ""
+echo "[6/6] Fine-tuned evaluation → $EVAL_FT"
+mkdir -p "$EVAL_FT"
+$PY evaluate/evaluate_csv_essential.py \
+    --input_pairs "$EVAL_PAIRS" \
+    --input_dir "$DATA_ROOT" \
+    --input_csv_dir "$MNN_FT" \
+    --output_dir "$EVAL_FT" \
+    --resize "$EVAL_W" "$EVAL_H" || \
+    echo "  (evaluate script returned non-zero — inspect $EVAL_FT)"
+
+echo ""
+echo "===================================================================="
+echo "  DONE."
+echo "  Zero-shot results : $EVAL_ZS/evaluation_results.txt"
+echo "  Fine-tuned results: $EVAL_FT/evaluation_results.txt"
+echo "===================================================================="

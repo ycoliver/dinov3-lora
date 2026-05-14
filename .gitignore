@@ -6,4 +6,16 @@ finetune_output/
 finetune_output_test/
 full_dataset/
 mnn_matching_*/
-finetune_*/
+inetune_*/
+
+# develop_dxl additions
+.venv/
+__pycache__/
+*.pyc
+finetune_output_lora_hf*/
+evaluate/*_hf/
+evaluate/*_hf_lora/
+
+# local installers / artifacts (not source)
+scripts/Miniconda3-*.sh
+*.DS_Store

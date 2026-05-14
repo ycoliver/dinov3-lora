@@ -1,0 +1,32 @@
+## ─────────────────────────────────────────────────────────────────────
+##  Python deps for the LoRA-HF DINOv3 matching pipeline
+##
+##  Tested on Python 3.9.6 (macOS system) + 3.10 / 3.11 (Linux).
+##  Install with:
+##      python3 -m venv .venv
+##      source .venv/bin/activate
+##      pip install -r requirements.txt
+##
+##  GPU users: install the matching torch wheel from pytorch.org first,
+##  then `pip install -r requirements.txt` (it will keep your torch).
+## ─────────────────────────────────────────────────────────────────────
+
+# Core deep-learning stack
+# (Pinned >= but not == so a CUDA-specific torch wheel installed
+#  beforehand is not overridden.)
+torch>=2.0
+torchvision>=0.15
+
+# DINOv3 was added to HuggingFace Transformers in 4.56
+transformers>=4.56
+safetensors>=0.4
+
+# Image / numerical tooling
+numpy>=1.24
+opencv-python>=4.8
+Pillow>=10.0
+
+# Training / progress / scientific
+scikit-learn>=1.3        # used by the official PCA notebook reference
+matplotlib>=3.7          # plot / debug
+tqdm>=4.65

@@ -44,9 +44,19 @@ class LoRALinear(nn.Module):
         in_features = original.in_features
         out_features = original.out_features
 
+        # Match the device/dtype of the wrapped Linear, so that injecting
+        # LoRA AFTER `model.to(device)` still puts A/B on the right device.
+        w = original.weight
+        device = w.device
+        dtype = w.dtype
+
         # A: random init (Kaiming); B: zero init → output starts at zero
-        self.lora_A = nn.Parameter(torch.empty(rank, in_features))
-        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
+        self.lora_A = nn.Parameter(
+            torch.empty(rank, in_features, device=device, dtype=dtype)
+        )
+        self.lora_B = nn.Parameter(
+            torch.zeros(out_features, rank, device=device, dtype=dtype)
+        )
         nn.init.kaiming_uniform_(self.lora_A)
 
         # Freeze the original weights
