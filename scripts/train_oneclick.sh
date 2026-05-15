@@ -56,7 +56,14 @@ case "$DATASET" in
     ;;
   navi)
     TRAIN_PAIRS="finetune/navi_train_pairs.txt"
-    EVAL_PAIRS="datasets/navi_with_gt.txt"
+    # If standard NAVI eval pairs (datasets/navi_with_gt.txt) are available,
+    # they are used; otherwise we fall back to the training pairs.
+    if [ -f "datasets/navi_with_gt.txt" ]; then
+        EVAL_PAIRS="datasets/navi_with_gt.txt"
+    else
+        EVAL_PAIRS="finetune/navi_train_pairs.txt"
+        echo "[warn] datasets/navi_with_gt.txt not found, using train pairs for eval"
+    fi
     DATA_ROOT="datasets/navi_resized"
     DEPTH_ROOT=""
     EVAL_W=1024
@@ -64,7 +71,12 @@ case "$DATASET" in
     ;;
   navi_mini)
     TRAIN_PAIRS="finetune/navi_train_pairs_mini.txt"
-    EVAL_PAIRS="datasets/navi_with_gt.txt"
+    if [ -f "datasets/navi_with_gt.txt" ]; then
+        EVAL_PAIRS="datasets/navi_with_gt.txt"
+    else
+        EVAL_PAIRS="finetune/navi_train_pairs_mini.txt"
+        echo "[warn] datasets/navi_with_gt.txt not found, using train pairs for eval"
+    fi
     DATA_ROOT="datasets/navi_resized"
     DEPTH_ROOT=""
     EVAL_W=1024
