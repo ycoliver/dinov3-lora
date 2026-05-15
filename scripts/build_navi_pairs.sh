@@ -22,7 +22,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
-DATA_ROOT="${1:-datasets/navi/navi_v1.5}"
+DATA_ROOT="${1:-datasets/navi_v1.5}"
 TRAIN_OUT="${2:-finetune/navi_train_pairs.txt}"
 TEST_OUT="${3:-datasets/navi_test_pairs.txt}"
 
