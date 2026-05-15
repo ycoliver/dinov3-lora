@@ -172,50 +172,84 @@ def train_one_epoch(
     for batch in dataloader:
         if not batch:
             continue
-        for sample in batch:
-            img_a = sample["img_a"].unsqueeze(0).to(device)
-            img_b = sample["img_b"].unsqueeze(0).to(device)
-            idx_a = sample["idx_a"].to(device)
-            idx_b = sample["idx_b"].to(device)
-            if len(idx_a) == 0:
-                continue
 
-            desc_a_all = model(img_a)              # (1, N, D)
-            desc_b_all = model(img_b)              # (1, N, D)
-            desc_a = desc_a_all[0, idx_a]          # (M, D)
-            desc_b = desc_b_all[0, idx_b]          # (M, D)
+        # ── True mini-batch forward (was: serial loop, defeating batch_size) ──
+        # Stack all 2*B images into a single (2B, 3, H, W) tensor and run ONE
+        # forward pass. Then split into A / B halves and gather the patch
+        # descriptors at the correspondence indices. The per-image patch
+        # indices are offset by `b * N_patches` so that, when concatenated,
+        # they index into a global (sum_M, D) tensor — letting the existing
+        # contrastive loss treat negatives from OTHER images in the same
+        # batch (Inter-Image InfoNCE), which is exactly what large batch
+        # sizes are supposed to enable.
+        valid = [s for s in batch if len(s["idx_a"]) > 0]
+        if not valid:
+            continue
+        B = len(valid)
 
-            losses = criterion(
-                desc_a, desc_b, idx_a, idx_b,
-                model.patch_size, img_size,           # forward img_size, no hard-coded 448
+        imgs_a = torch.stack([s["img_a"] for s in valid], dim=0).to(device)   # (B, 3, H, W)
+        imgs_b = torch.stack([s["img_b"] for s in valid], dim=0).to(device)
+        imgs   = torch.cat([imgs_a, imgs_b], dim=0)                           # (2B, 3, H, W)
+
+        feats     = model(imgs)                                # (2B, N, D)
+        N_patches = feats.shape[1]
+        feats_a   = feats[:B]                                  # (B, N, D)
+        feats_b   = feats[B:]                                  # (B, N, D)
+
+        # Concatenate per-sample correspondence indices, offsetting each
+        # image by b*N so that idx[b]=k → row b*N+k of the flattened (B*N, D)
+        # descriptor matrix. This makes safe-radius masking automatically
+        # confine itself to within-image neighbours (different images live
+        # in disjoint index ranges → distance >> safe_radius), so the same
+        # HardInfoNCE code path stays correct.
+        idx_a_list, idx_b_list = [], []
+        desc_a_list, desc_b_list = [], []
+        for b, s in enumerate(valid):
+            ia = s["idx_a"].to(device)
+            ib = s["idx_b"].to(device)
+            idx_a_list.append(ia + b * N_patches)
+            idx_b_list.append(ib + b * N_patches)
+            desc_a_list.append(feats_a[b, ia])                 # (M_b, D)
+            desc_b_list.append(feats_b[b, ib])
+
+        idx_a   = torch.cat(idx_a_list,  dim=0)                # (sum_M,)
+        idx_b   = torch.cat(idx_b_list,  dim=0)
+        desc_a  = torch.cat(desc_a_list, dim=0)                # (sum_M, D)
+        desc_b  = torch.cat(desc_b_list, dim=0)
+        if desc_a.shape[0] == 0:
+            continue
+
+        losses = criterion(
+            desc_a, desc_b, idx_a, idx_b,
+            model.patch_size, img_size,
+        )
+        loss = losses["total"]
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            [p for p in model.parameters() if p.requires_grad],
+            max_norm=1.0,
+        )
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+
+        total_loss        += loss.item()
+        total_contrastive += losses["contrastive"].item()
+        if "diversity" in losses:
+            total_diversity += losses["diversity"].item()
+        num_valid += 1
+        step += 1
+
+        if step % LOG_EVERY == 0:
+            print(
+                f"  [epoch {epoch}] step {step} | "
+                f"loss={loss.item():.4f} | "
+                f"contrastive={losses['contrastive'].item():.4f} | "
+                f"B={B} corr={desc_a.shape[0]}",
+                flush=True,
             )
-            loss = losses["total"]
-
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad],
-                max_norm=1.0,
-            )
-            optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
-
-            total_loss += loss.item()
-            total_contrastive += losses["contrastive"].item()
-            if "diversity" in losses:
-                total_diversity += losses["diversity"].item()
-            num_valid += 1
-            step += 1
-
-            if step % LOG_EVERY == 0:
-                print(
-                    f"  [epoch {epoch}] step {step} | "
-                    f"loss={loss.item():.4f} | "
-                    f"contrastive={losses['contrastive'].item():.4f} | "
-                    f"corr={len(idx_a)}",
-                    flush=True,
-                )
 
     if num_valid == 0:
         return {"loss": 0.0, "contrastive": 0.0, "diversity": 0.0,
