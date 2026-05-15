@@ -22,9 +22,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 
-DATA_ROOT="${1:-full_dataset/navi_v1.5}"
+DATA_ROOT="${1:-datasets/navi/navi_v1.5}"
 TRAIN_OUT="${2:-finetune/navi_train_pairs.txt}"
 TEST_OUT="${3:-datasets/navi_test_pairs.txt}"
+
+if [ ! -d "$DATA_ROOT" ]; then
+    echo "✗ DATA_ROOT not found: $DATA_ROOT"
+    echo "  Pass it explicitly:  bash scripts/build_navi_pairs.sh /abs/path/to/navi_v1.5"
+    exit 1
+fi
 
 # Per-scene pair limits (final totals are determined by the scene-level split,
 # not by an arbitrary cap; NAVI itself does not specify a "test set size").

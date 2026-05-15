@@ -166,7 +166,7 @@ def main():
         description="Generate training pairs from NAVI v1.5 dataset",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--data_root", type=str, default="full_dataset/navi_v1.5",
+    parser.add_argument("--data_root", type=str, default="datasets/navi/navi_v1.5",
                         help="Root directory of the NAVI dataset")
     parser.add_argument("--split", type=str, default="train",
                         choices=["train", "test"],
