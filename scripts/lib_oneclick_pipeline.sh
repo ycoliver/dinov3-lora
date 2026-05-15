@@ -81,11 +81,14 @@ if [ ! -d "$WEIGHTS_DIR" ]; then
 fi
 
 # Hyper-params (shared by small and middle).
-IMG_SIZE=448
-BATCH_SIZE=8
-LR=1e-4
-LORA_RANK=4
-LORA_ALPHA=8.0
+# Each can be overridden from the command line, e.g.
+#   BATCH_SIZE=16 LR=2e-4 LORA_RANK=8 LORA_ALPHA=16 \
+#       bash scripts/train_oneclick_middle.sh 15
+IMG_SIZE=${IMG_SIZE:-448}
+BATCH_SIZE=${BATCH_SIZE:-8}
+LR=${LR:-1e-4}
+LORA_RANK=${LORA_RANK:-4}
+LORA_ALPHA=${LORA_ALPHA:-8.0}
 
 # NAVI-only data paths
 TRAIN_PAIRS="finetune/navi_train_pairs.txt"
@@ -123,7 +126,10 @@ echo "  Data root    : $DATA_ROOT"
 echo "  Output root  : $OUT_ROOT"
 echo "  Epochs       : $EPOCHS"
 echo "  Img size     : $IMG_SIZE"
+echo "  Batch size   : $BATCH_SIZE"
+echo "  LR           : $LR"
 echo "  LoRA rank    : $LORA_RANK"
+echo "  LoRA alpha   : $LORA_ALPHA"
 echo "  Steps        : ${START_STEP}..${END_STEP}"
 if [ "$START_STEP" -le 7 ] && [ "$END_STEP" -ge 7 ]; then
 echo "  Eval resume  : start_epoch=$EVAL_START_EPOCH  force=$EVAL_FORCE"
