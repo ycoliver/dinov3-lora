@@ -29,6 +29,10 @@
 #  Per-epoch eval resume controls (STEP 7):
 #    EVAL_START_EPOCH=5 START_STEP=7 bash scripts/train_oneclick.sh navi
 #        → only eval epoch005, epoch006, ... (skip 0..4)
+#    EVAL_EVERY=3 START_STEP=7 bash scripts/train_oneclick.sh navi
+#        → only eval every 3rd epoch: 0, 3, 6, 9, 12, ...
+#    EVAL_EVERY=3 EVAL_START_EPOCH=9 START_STEP=7 bash scripts/train_oneclick.sh navi
+#        → only eval epochs 9, 12, 15, ... (combine stride + start)
 #    EVAL_FORCE=1 START_STEP=7 bash scripts/train_oneclick.sh navi
 #        → re-evaluate every epoch even if results already exist
 #    (default behaviour: skip any epoch whose evaluation_results.txt exists)
@@ -55,6 +59,7 @@ END_STEP=${END_STEP:-7}
 
 # Per-epoch eval (STEP 7) resume controls.
 EVAL_START_EPOCH=${EVAL_START_EPOCH:-0}     # numeric, e.g. 0, 5, 12
+EVAL_EVERY=${EVAL_EVERY:-1}                 # stride: only eval epoch where idx % EVAL_EVERY == 0
 EVAL_FORCE=${EVAL_FORCE:-0}                 # 1 = re-run even if results exist
 
 # Helper: returns 0 (success) if step $1 should be executed.
@@ -187,7 +192,7 @@ echo "  Img size     : $IMG_SIZE"
 echo "  LoRA rank    : $LORA_RANK"
 echo "  Steps        : ${START_STEP}..${END_STEP}"
 if [ "$START_STEP" -le 7 ] && [ "$END_STEP" -ge 7 ]; then
-echo "  Eval resume  : start_epoch=$EVAL_START_EPOCH  force=$EVAL_FORCE"
+echo "  Eval resume  : start_epoch=$EVAL_START_EPOCH  every=$EVAL_EVERY  force=$EVAL_FORCE"
 fi
 echo "===================================================================="
 
@@ -382,7 +387,7 @@ SUMMARY_TSV="$EVAL_PER_EPOCH/summary.tsv"
 if run_step 7; then
 echo ""
 echo "[7/7] Per-epoch evaluation → $EVAL_PER_EPOCH"
-echo "      EVAL_START_EPOCH=$EVAL_START_EPOCH  EVAL_FORCE=$EVAL_FORCE"
+echo "      EVAL_START_EPOCH=$EVAL_START_EPOCH  EVAL_EVERY=$EVAL_EVERY  EVAL_FORCE=$EVAL_FORCE"
 mkdir -p "$EVAL_PER_EPOCH"
 
 # Only (re)write the TSV header when starting from scratch; otherwise
@@ -417,7 +422,14 @@ else
             continue
         fi
 
-        # ── Resume gate 2: skip already-finished epochs (unless forced). ──
+        # ── Resume gate 2: stride filter (every N epochs). ──
+        if [ "$EVAL_EVERY" -gt 1 ] && [ $((EPOCH_NUM % EVAL_EVERY)) -ne 0 ]; then
+            echo ""
+            echo "  ── epoch ${EPOCH_TAG} ── SKIP (stride: idx % $EVAL_EVERY != 0)"
+            continue
+        fi
+
+        # ── Resume gate 3: skip already-finished epochs (unless forced). ──
         if [ -f "$RES" ] && [ "$EVAL_FORCE" != "1" ]; then
             echo ""
             echo "  ── epoch ${EPOCH_TAG} ── SKIP (already evaluated: $RES)"
