@@ -71,7 +71,7 @@ case "$DATASET" in
         echo "[warn] No held-out test pairs found; falling back to training pairs."
         echo "[warn] Run 'bash scripts/build_navi_pairs.sh' first for a clean eval."
     fi
-    DATA_ROOT="datasets/navi_resized"
+    DATA_ROOT="datasets/navi_v1.5"
     DEPTH_ROOT=""
     EVAL_W=1024
     EVAL_H=1024
@@ -86,7 +86,7 @@ case "$DATASET" in
         EVAL_PAIRS="finetune/navi_train_pairs_mini.txt"
         echo "[warn] No held-out test pairs found; falling back to training pairs."
     fi
-    DATA_ROOT="datasets/navi_resized"
+    DATA_ROOT="datasets/navi_v1.5"
     DEPTH_ROOT=""
     EVAL_W=1024
     EVAL_H=1024
