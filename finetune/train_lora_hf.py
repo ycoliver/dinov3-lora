@@ -332,7 +332,11 @@ def main():
     )
 
     # Cosine LR with warm-up
-    steps_per_epoch = max(len(dataset), 1)
+    # NOTE: steps_per_epoch must reflect the number of optimizer.step() calls
+    # per epoch — i.e. the number of mini-batches, NOT the number of samples.
+    # (Earlier this was len(dataset), which assumed batch_size=1; after the
+    # mini-batch fix one optimizer.step() consumes BATCH_SIZE samples.)
+    steps_per_epoch = max(len(dataloader), 1)
     total_steps = max(args.epochs * steps_per_epoch, 1)
     warmup_steps = min(2 * steps_per_epoch, total_steps // 5)
 
