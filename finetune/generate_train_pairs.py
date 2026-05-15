@@ -1,5 +1,5 @@
 """
-Generate training pairs from the full NAVI v1.5 dataset.
+Generate train/val/test pairs from the full NAVI v1.5 dataset.
 
 Reads annotations.json from each object/scene directory, extracts camera
 parameters, computes relative poses, and outputs a pairs file in the same
@@ -7,13 +7,27 @@ parameters, computes relative poses, and outputs a pairs file in the same
 
     path_A path_B rot_A rot_B K_A[9] K_B[9] T_AB[16]
 
-Only uses images from the 'train' split (not 'val' or 'test').
+The --split argument selects which images participate in pair generation.
+NAVI's annotations.json already labels each image as 'train' / 'val' / 'test',
+and we only enumerate pairs whose BOTH endpoints belong to the requested split.
+Therefore train/val/test pairs are guaranteed to be image-disjoint, with no
+risk of data leakage between sets.
 
 Usage:
+    # Training pairs (default)
     python -m finetune.generate_train_pairs \
         --data_root full_dataset/navi_v1.5 \
+        --split train \
         --output finetune/navi_train_pairs.txt \
         --max_pairs_per_scene 20 \
+        --min_angle 10 --max_angle 90
+
+    # Test pairs (target ~3000 pairs total)
+    python -m finetune.generate_train_pairs \
+        --data_root full_dataset/navi_v1.5 \
+        --split test \
+        --output datasets/navi_test_pairs.txt \
+        --max_pairs_per_scene 12 \
         --min_angle 10 --max_angle 90
 """
 
@@ -73,8 +87,14 @@ def compute_relative_pose(T_w2c_0: np.ndarray, T_w2c_1: np.ndarray) -> np.ndarra
     return T_0to1
 
 
-def process_scene(scene_dir: Path, max_pairs: int, min_angle: float, max_angle: float) -> list[str]:
-    """Process one scene directory and return formatted pair lines."""
+def process_scene(scene_dir: Path, max_pairs: int, min_angle: float, max_angle: float,
+                  split: str = "train") -> list[str]:
+    """Process one scene directory and return formatted pair lines.
+
+    Only images whose annotation 'split' field equals `split` are used.
+    Pairs are enumerated within that subset, so different splits never share
+    an image (i.e., no data leakage between train / val / test).
+    """
     ann_path = scene_dir / "annotations.json"
     if not ann_path.exists():
         return []
@@ -82,14 +102,14 @@ def process_scene(scene_dir: Path, max_pairs: int, min_angle: float, max_angle: 
     with open(ann_path, "r") as f:
         annotations = json.load(f)
 
-    # Filter to train split only
-    train_anns = [a for a in annotations if a.get("split", "train") == "train"]
-    if len(train_anns) < 2:
+    # Filter to requested split only
+    split_anns = [a for a in annotations if a.get("split", "train") == split]
+    if len(split_anns) < 2:
         return []
 
     # Build camera data for each image
     cameras = {}
-    for ann in train_anns:
+    for ann in split_anns:
         fname = ann["filename"]
         cam = ann["camera"]
         T_w2c = build_extrinsic(cam["q"], cam["t"])
@@ -147,6 +167,9 @@ def main():
     )
     parser.add_argument("--data_root", type=str, default="full_dataset/navi_v1.5",
                         help="Root directory of the NAVI dataset")
+    parser.add_argument("--split", type=str, default="train",
+                        choices=["train", "val", "test"],
+                        help="Which NAVI split to enumerate pairs from")
     parser.add_argument("--output", type=str, default="finetune/navi_train_pairs.txt",
                         help="Output pairs file")
     parser.add_argument("--max_pairs_per_scene", type=int, default=20,
@@ -155,6 +178,8 @@ def main():
                         help="Minimum angular distance between cameras (degrees)")
     parser.add_argument("--max_angle", type=float, default=90.0,
                         help="Maximum angular distance between cameras (degrees)")
+    parser.add_argument("--max_total_pairs", type=int, default=0,
+                        help="If >0, randomly subsample to this many pairs across all scenes")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -182,6 +207,7 @@ def main():
                 max_pairs=args.max_pairs_per_scene,
                 min_angle=args.min_angle,
                 max_angle=args.max_angle,
+                split=args.split,
             )
             if lines:
                 n_scenes += 1
@@ -191,6 +217,11 @@ def main():
     # Shuffle the final list
     random.shuffle(all_lines)
 
+    # Optionally cap the total number of pairs (e.g. to get ~3000 test pairs)
+    if args.max_total_pairs > 0 and len(all_lines) > args.max_total_pairs:
+        all_lines = all_lines[: args.max_total_pairs]
+        print(f"  -> Subsampled to {args.max_total_pairs} pairs")
+
     # Write output
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +229,7 @@ def main():
         for line in all_lines:
             f.write(line + "\n")
 
-    print(f"\nTotal: {len(all_lines)} training pairs from {n_scenes} scenes")
+    print(f"\nTotal: {len(all_lines)} {args.split} pairs from {n_scenes} scenes")
     print(f"Saved to: {output_path}")
 
     # Validate format
