@@ -7,11 +7,14 @@ parameters, computes relative poses, and outputs a pairs file in the same
 
     path_A path_B rot_A rot_B K_A[9] K_B[9] T_AB[16]
 
-The --split argument selects which images participate in pair generation.
-NAVI's annotations.json already labels each image as 'train' / 'val' / 'test',
-and we only enumerate pairs whose BOTH endpoints belong to the requested split.
-Therefore train/val/test pairs are guaranteed to be image-disjoint, with no
-risk of data leakage between sets.
+The --split argument selects whether to emit pairs from the train or test
+SCENE partition. NAVI v1.5 does not ship per-image split labels in
+annotations.json (only object/scene directories), so we instead perform a
+deterministic SCENE-LEVEL split: a fixed seed shuffles the list of all
+multiview_* scenes, and the last `--test_scene_ratio` fraction (default
+15%) is reserved for testing. Because every image in a scene goes entirely
+into one side of the split, train and test are guaranteed image-disjoint
+with zero leakage.
 
 Usage:
     # Training pairs (default)
@@ -22,7 +25,7 @@ Usage:
         --max_pairs_per_scene 20 \
         --min_angle 10 --max_angle 90
 
-    # Test pairs (target ~3000 pairs total)
+    # Test pairs (no cap → use whatever the held-out scenes give us)
     python -m finetune.generate_train_pairs \
         --data_root full_dataset/navi_v1.5 \
         --split test \
@@ -87,13 +90,13 @@ def compute_relative_pose(T_w2c_0: np.ndarray, T_w2c_1: np.ndarray) -> np.ndarra
     return T_0to1
 
 
-def process_scene(scene_dir: Path, max_pairs: int, min_angle: float, max_angle: float,
-                  split: str = "train") -> list[str]:
+def process_scene(scene_dir: Path, max_pairs: int, min_angle: float,
+                  max_angle: float) -> list[str]:
     """Process one scene directory and return formatted pair lines.
 
-    Only images whose annotation 'split' field equals `split` are used.
-    Pairs are enumerated within that subset, so different splits never share
-    an image (i.e., no data leakage between train / val / test).
+    All images inside the scene are used; train/test image-disjointness is
+    enforced at the SCENE level by the caller (`main`), not at the image
+    level (NAVI annotations.json has no per-image split label).
     """
     ann_path = scene_dir / "annotations.json"
     if not ann_path.exists():
@@ -102,24 +105,22 @@ def process_scene(scene_dir: Path, max_pairs: int, min_angle: float, max_angle: 
     with open(ann_path, "r") as f:
         annotations = json.load(f)
 
-    # Filter to requested split only
-    split_anns = [a for a in annotations if a.get("split", "train") == split]
-    if len(split_anns) < 2:
+    if len(annotations) < 2:
         return []
 
     # Build camera data for each image
     cameras = {}
-    for ann in split_anns:
+    for ann in annotations:
         fname = ann["filename"]
         cam = ann["camera"]
         T_w2c = build_extrinsic(cam["q"], cam["t"])
         K = build_intrinsic(cam["focal_length"], ann["image_size"])
-        
+
         # Construct the relative path: object_id/scene_name/images/filename
         obj_id = ann["object_id"]
         scene_name = ann["scene_name"]
         rel_path = f"{obj_id}/{scene_name}/images/{fname}"
-        
+
         cameras[rel_path] = {
             "T_w2c": T_w2c,
             "K": K,
@@ -168,8 +169,19 @@ def main():
     parser.add_argument("--data_root", type=str, default="full_dataset/navi_v1.5",
                         help="Root directory of the NAVI dataset")
     parser.add_argument("--split", type=str, default="train",
-                        choices=["train", "val", "test"],
-                        help="Which NAVI split to enumerate pairs from")
+                        choices=["train", "test"],
+                        help="Which scene-level split to enumerate pairs from. "
+                             "All multiview_* scenes are deterministically split "
+                             "into train/test using --test_scene_ratio (no per-image "
+                             "split labels are read from annotations.json).")
+    parser.add_argument("--test_scene_ratio", type=float, default=0.15,
+                        help="Fraction of multiview scenes reserved for testing. "
+                             "The same shuffle seed is used for train and test, "
+                             "so the two splits are image-disjoint by construction.")
+    parser.add_argument("--split_seed", type=int, default=12345,
+                        help="Seed used ONLY for the train/test scene shuffling. "
+                             "Keep this fixed across both runs (train and test) "
+                             "or train/test will overlap.")
     parser.add_argument("--output", type=str, default="finetune/navi_train_pairs.txt",
                         help="Output pairs file")
     parser.add_argument("--max_pairs_per_scene", type=int, default=20,
@@ -187,32 +199,61 @@ def main():
     np.random.seed(args.seed)
 
     data_root = Path(args.data_root)
-    all_lines = []
-    n_scenes = 0
 
-    # Iterate over all objects
+    # ── Step 1. Collect ALL multiview_* scenes across all objects ────────
+    all_scenes: list[Path] = []
     for obj_dir in sorted(data_root.iterdir()):
         if not obj_dir.is_dir() or obj_dir.name == "custom_splits":
             continue
-        
-        # Iterate over all scenes within this object
         for scene_dir in sorted(obj_dir.iterdir()):
             if not scene_dir.is_dir():
                 continue
             if not scene_dir.name.startswith("multiview"):
-                continue  # Skip video/wild_set directories for training
-            
-            lines = process_scene(
-                scene_dir,
-                max_pairs=args.max_pairs_per_scene,
-                min_angle=args.min_angle,
-                max_angle=args.max_angle,
-                split=args.split,
-            )
-            if lines:
-                n_scenes += 1
-                all_lines.extend(lines)
-                print(f"  {obj_dir.name}/{scene_dir.name}: {len(lines)} pairs")
+                continue  # Skip video/wild_set directories
+            if not (scene_dir / "annotations.json").exists():
+                continue
+            all_scenes.append(scene_dir)
+
+    if not all_scenes:
+        raise SystemExit(
+            f"[error] No multiview_* scenes found under {data_root}. "
+            f"Did you extract the NAVI tarball correctly?"
+        )
+
+    # ── Step 2. Deterministically split scenes into train / test ─────────
+    # IMPORTANT: use a *separate* fixed seed (independent from --seed) so
+    # both `--split train` and `--split test` runs see exactly the same
+    # shuffle and therefore produce disjoint scene sets.
+    scene_rng = random.Random(args.split_seed)
+    shuffled = list(all_scenes)
+    scene_rng.shuffle(shuffled)
+    n_test = max(1, int(round(len(shuffled) * args.test_scene_ratio)))
+    test_scenes = set(shuffled[-n_test:])
+    train_scenes = set(shuffled[:-n_test])
+
+    if args.split == "train":
+        chosen_scenes = sorted(train_scenes, key=lambda p: str(p))
+    else:
+        chosen_scenes = sorted(test_scenes, key=lambda p: str(p))
+
+    print(f"[split] total scenes={len(all_scenes)}  "
+          f"train={len(train_scenes)}  test={len(test_scenes)}  "
+          f"-> using {len(chosen_scenes)} scenes for split='{args.split}'")
+
+    # ── Step 3. Generate pairs from chosen scenes ────────────────────────
+    all_lines = []
+    n_scenes = 0
+    for scene_dir in chosen_scenes:
+        lines = process_scene(
+            scene_dir,
+            max_pairs=args.max_pairs_per_scene,
+            min_angle=args.min_angle,
+            max_angle=args.max_angle,
+        )
+        if lines:
+            n_scenes += 1
+            all_lines.extend(lines)
+            print(f"  {scene_dir.parent.name}/{scene_dir.name}: {len(lines)} pairs")
 
     # Shuffle the final list
     random.shuffle(all_lines)
@@ -233,10 +274,13 @@ def main():
     print(f"Saved to: {output_path}")
 
     # Validate format
-    with open(output_path, "r") as f:
-        sample = f.readline().strip().split()
-        assert len(sample) == 38, f"Expected 38 tokens per line, got {len(sample)}"
-    print("Format validation: OK (38 tokens per line)")
+    if all_lines:
+        with open(output_path, "r") as f:
+            sample = f.readline().strip().split()
+            assert len(sample) == 38, f"Expected 38 tokens per line, got {len(sample)}"
+        print("Format validation: OK (38 tokens per line)")
+    else:
+        print("[warn] No pairs generated for this split — output file is empty.")
 
 
 if __name__ == "__main__":

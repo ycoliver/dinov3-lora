@@ -16,6 +16,9 @@ finetune_output_lora_hf*/
 evaluate/*_hf/
 evaluate/*_hf_lora/
 
+# unified run output directory (train_oneclick.sh)
+output/
+
 # local installers / artifacts (not source)
 scripts/Miniconda3-*.sh
 *.DS_Store

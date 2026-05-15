@@ -105,11 +105,23 @@ case "$DATASET" in
     ;;
 esac
 
-OUT_LORA="finetune_output_lora_hf_${DATASET}"
-MNN_ZS="mnn_matching_hf/${DATASET}"
-MNN_FT="mnn_matching_lora_hf/${DATASET}"
-EVAL_ZS="evaluate/${DATASET}_hf"
-EVAL_FT="evaluate/${DATASET}_hf_lora"
+# ---------------------------------------------------------------------
+#  Output layout (all run artefacts live under output/<dataset>/)
+#
+#    output/<dataset>/
+#      ├── lora_ckpt/        ← LoRA checkpoints + training log
+#      ├── mnn_zeroshot/     ← zero-shot feature matches (CSV)
+#      ├── mnn_finetuned/    ← fine-tuned feature matches (CSV)
+#      ├── eval_zeroshot/    ← zero-shot evaluation results
+#      └── eval_finetuned/   ← fine-tuned evaluation results
+# ---------------------------------------------------------------------
+OUT_ROOT="output/${DATASET}"
+OUT_LORA="${OUT_ROOT}/lora_ckpt"
+MNN_ZS="${OUT_ROOT}/mnn_zeroshot"
+MNN_FT="${OUT_ROOT}/mnn_finetuned"
+EVAL_ZS="${OUT_ROOT}/eval_zeroshot"
+EVAL_FT="${OUT_ROOT}/eval_finetuned"
+mkdir -p "$OUT_ROOT"
 
 echo "===================================================================="
 echo "  DINOv3 LoRA-HF one-click pipeline"
