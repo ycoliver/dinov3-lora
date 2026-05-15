@@ -11,30 +11,51 @@
 #    [6] Fine-tuned evaluation                             (latest-ckpt metrics)
 #    [7] Per-epoch evaluation                              (curve over training)
 #
-#  All produced metrics live under `evaluate/<dataset>_(hf|hf_lora)/`,
+#  All produced metrics live under `output/<dataset>_<model>/`,
 #  drop-in compatible with the existing zero-shot folders.
 #
 #  Usage:
-#    bash scripts/train_oneclick.sh              # default = navi
+#    bash scripts/train_oneclick.sh                          # default = navi, small
 #    bash scripts/train_oneclick.sh navi
-#    bash scripts/train_oneclick.sh scannet
-#    bash scripts/train_oneclick.sh navi 5       # only run 5 epochs
+#    MODEL=middle bash scripts/train_oneclick.sh navi
+#    MODEL=small  bash scripts/train_oneclick.sh navi 5      # only run 5 epochs
 #
 #  Skip earlier steps (resume the pipeline mid-way):
 #    START_STEP=4 bash scripts/train_oneclick.sh navi          # start from training
 #    START_STEP=5 bash scripts/train_oneclick.sh navi          # skip train, eval latest ckpt
 #    START_STEP=7 bash scripts/train_oneclick.sh navi          # only per-epoch eval
 #    START_STEP=4 END_STEP=4 bash scripts/train_oneclick.sh navi   # train only
+#
+#  Per-epoch eval resume controls (STEP 7):
+#    EVAL_START_EPOCH=5 START_STEP=7 bash scripts/train_oneclick.sh navi
+#        → only eval epoch005, epoch006, ... (skip 0..4)
+#    EVAL_FORCE=1 START_STEP=7 bash scripts/train_oneclick.sh navi
+#        → re-evaluate every epoch even if results already exist
+#    (default behaviour: skip any epoch whose evaluation_results.txt exists)
 # =====================================================================
 set -euo pipefail
 
 DATASET=${1:-navi}
 EPOCHS=${2:-15}
 
+# Model size: 'small' (≈ 86M, ViT-S/B) or 'middle' (≈ 300M, ViT-L). Default = small.
+MODEL=${MODEL:-small}
+case "$MODEL" in
+  small|middle) ;;
+  *)
+    echo "Unknown MODEL '$MODEL'. Choose: small | middle"
+    exit 1
+    ;;
+esac
+
 # Step gating: which steps to run. Default = full pipeline (1..7).
 # Override via env: START_STEP=4 (skip 1..3), END_STEP=6 (skip 7), etc.
 START_STEP=${START_STEP:-1}
 END_STEP=${END_STEP:-7}
+
+# Per-epoch eval (STEP 7) resume controls.
+EVAL_START_EPOCH=${EVAL_START_EPOCH:-0}     # numeric, e.g. 0, 5, 12
+EVAL_FORCE=${EVAL_FORCE:-0}                 # 1 = re-run even if results exist
 
 # Helper: returns 0 (success) if step $1 should be executed.
 run_step() {
@@ -53,7 +74,18 @@ fi
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$PROJECT_ROOT"
 
-WEIGHTS_DIR="dinov3_weights"
+# Each model size lives in its own sub-directory of dinov3_weights/.
+#   dinov3_weights/dinov3-small/   (≈ 86M  ViT-S/B)
+#   dinov3_weights/dinov3-middle/  (≈ 300M ViT-L, 1.21 GB safetensors)
+WEIGHTS_DIR="dinov3_weights/dinov3-${MODEL}"
+if [ ! -d "$WEIGHTS_DIR" ]; then
+    echo "[error] Weights directory not found: $WEIGHTS_DIR"
+    echo "        Expected layout:"
+    echo "          dinov3_weights/dinov3-small/   (HF safetensors)"
+    echo "          dinov3_weights/dinov3-middle/  (HF safetensors)"
+    exit 1
+fi
+
 IMG_SIZE=448
 BATCH_SIZE=8
 LR=1e-4
@@ -124,16 +156,16 @@ case "$DATASET" in
 esac
 
 # ---------------------------------------------------------------------
-#  Output layout (all run artefacts live under output/<dataset>/)
+#  Output layout (all run artefacts live under output/<dataset>_<model>/)
 #
-#    output/<dataset>/
+#    output/<dataset>_<model>/
 #      ├── lora_ckpt/        ← LoRA checkpoints + training log
 #      ├── mnn_zeroshot/     ← zero-shot feature matches (CSV)
 #      ├── mnn_finetuned/    ← fine-tuned feature matches (CSV)
 #      ├── eval_zeroshot/    ← zero-shot evaluation results
 #      └── eval_finetuned/   ← fine-tuned evaluation results
 # ---------------------------------------------------------------------
-OUT_ROOT="output/${DATASET}"
+OUT_ROOT="output/${DATASET}_${MODEL}"
 OUT_LORA="${OUT_ROOT}/lora_ckpt"
 MNN_ZS="${OUT_ROOT}/mnn_zeroshot"
 MNN_FT="${OUT_ROOT}/mnn_finetuned"
@@ -145,14 +177,18 @@ mkdir -p "$OUT_ROOT"
 echo "===================================================================="
 echo "  DINOv3 LoRA-HF one-click pipeline"
 echo "  Dataset      : $DATASET"
+echo "  Model        : $MODEL  ($WEIGHTS_DIR)"
 echo "  Train pairs  : $TRAIN_PAIRS"
 echo "  Eval pairs   : $EVAL_PAIRS"
 echo "  Data root    : $DATA_ROOT"
-echo "  Weights dir  : $WEIGHTS_DIR"
+echo "  Output root  : $OUT_ROOT"
 echo "  Epochs       : $EPOCHS"
 echo "  Img size     : $IMG_SIZE"
 echo "  LoRA rank    : $LORA_RANK"
 echo "  Steps        : ${START_STEP}..${END_STEP}"
+if [ "$START_STEP" -le 7 ] && [ "$END_STEP" -ge 7 ]; then
+echo "  Eval resume  : start_epoch=$EVAL_START_EPOCH  force=$EVAL_FORCE"
+fi
 echo "===================================================================="
 
 # ---------------------------------------------------------------------
@@ -329,18 +365,31 @@ fi
 #  Iterate over every checkpoint_epoch*.pth produced during training,
 #  run extract+evaluate for each, then summarise into a single table:
 #
-#    output/<dataset>/eval_per_epoch/
+#    output/<dataset>_<model>/eval_per_epoch/
 #      ├── epoch000/                 ← extract MNN csvs
 #      │   └── eval/                 ← evaluation_results.txt
 #      ├── epoch001/...
 #      └── summary.tsv               ← one row per epoch (key metrics)
+#
+#  Resume behaviour:
+#    * EVAL_START_EPOCH=N skips checkpoints whose epoch index < N.
+#    * Without EVAL_FORCE=1, any epoch whose `eval/evaluation_results.txt`
+#      already exists is skipped (so an interrupted run can be continued
+#      simply by re-invoking with START_STEP=7 — completed epochs are
+#      reused, and remaining epochs are processed).
 # ---------------------------------------------------------------------
 SUMMARY_TSV="$EVAL_PER_EPOCH/summary.tsv"
 if run_step 7; then
 echo ""
 echo "[7/7] Per-epoch evaluation → $EVAL_PER_EPOCH"
+echo "      EVAL_START_EPOCH=$EVAL_START_EPOCH  EVAL_FORCE=$EVAL_FORCE"
 mkdir -p "$EVAL_PER_EPOCH"
-echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
+
+# Only (re)write the TSV header when starting from scratch; otherwise
+# we'll regenerate the file at the very end from per-epoch results.
+if [ ! -f "$SUMMARY_TSV" ]; then
+    echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
+fi
 
 shopt -s nullglob
 CKPT_LIST=( "$OUT_LORA"/checkpoint_epoch*.pth )
@@ -355,8 +404,26 @@ else
         FNAME=$(basename "$CKPT_E")
         EPOCH_TAG="${FNAME#checkpoint_epoch}"
         EPOCH_TAG="${EPOCH_TAG%.pth}"
+        # Strip leading zeros for numeric comparison (10#NNN forces base-10 parsing).
+        EPOCH_NUM=$((10#$EPOCH_TAG))
         EP_DIR="$EVAL_PER_EPOCH/epoch${EPOCH_TAG}"
         EP_EVAL_DIR="$EP_DIR/eval"
+        RES="$EP_EVAL_DIR/evaluation_results.txt"
+
+        # ── Resume gate 1: skip epochs below the requested start. ──
+        if [ "$EPOCH_NUM" -lt "$EVAL_START_EPOCH" ]; then
+            echo ""
+            echo "  ── epoch ${EPOCH_TAG} ── SKIP (< EVAL_START_EPOCH=$EVAL_START_EPOCH)"
+            continue
+        fi
+
+        # ── Resume gate 2: skip already-finished epochs (unless forced). ──
+        if [ -f "$RES" ] && [ "$EVAL_FORCE" != "1" ]; then
+            echo ""
+            echo "  ── epoch ${EPOCH_TAG} ── SKIP (already evaluated: $RES)"
+            continue
+        fi
+
         mkdir -p "$EP_EVAL_DIR"
 
         echo ""
@@ -388,11 +455,20 @@ else
             --resize "$EVAL_W" "$EVAL_H" || {
                 echo "  [warn] evaluate returned non-zero for epoch ${EPOCH_TAG}"
             }
+    done
 
-        # 7c. parse evaluation_results.txt → one row in summary.tsv
-        RES="$EP_EVAL_DIR/evaluation_results.txt"
-        if [ -f "$RES" ]; then
-            $PY - "$RES" "$EPOCH_TAG" "$SUMMARY_TSV" <<'PY'
+    # ──────────────────────────────────────────────────────────────
+    # Rebuild summary.tsv from every existing per-epoch result file,
+    # so the table is consistent regardless of resume / force behaviour.
+    # ──────────────────────────────────────────────────────────────
+    echo ""
+    echo "  Rebuilding summary.tsv from existing per-epoch results..."
+    echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
+    shopt -s nullglob
+    for EP_RES in "$EVAL_PER_EPOCH"/epoch*/eval/evaluation_results.txt; do
+        EP_TAG=$(basename "$(dirname "$(dirname "$EP_RES")")")
+        EP_TAG="${EP_TAG#epoch}"
+        $PY - "$EP_RES" "$EP_TAG" "$SUMMARY_TSV" <<'PY'
 import re, sys
 res_path, epoch_tag, summary_path = sys.argv[1:4]
 text = open(res_path, "r", errors="ignore").read()
@@ -409,13 +485,10 @@ rec   = grab(r"Recall[^0-9\-]*([0-9.]+)")
 
 with open(summary_path, "a") as f:
     f.write(f"{epoch_tag}\t{auc5}\t{auc10}\t{auc20}\t{prec}\t{rec}\n")
-print(f"  summary  : auc@5={auc5}  auc@10={auc10}  auc@20={auc20}  P={prec}  R={rec}")
 PY
-        else
-            echo "  [warn] $RES not found, summary row skipped."
-            echo -e "${EPOCH_TAG}\t-\t-\t-\t-\t-" >> "$SUMMARY_TSV"
-        fi
     done
+    shopt -u nullglob
+
     echo ""
     echo "  Per-epoch summary written to: $SUMMARY_TSV"
     echo "  ──────── summary preview ────────"
