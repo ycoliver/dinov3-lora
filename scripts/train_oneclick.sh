@@ -19,11 +19,28 @@
 #    bash scripts/train_oneclick.sh navi
 #    bash scripts/train_oneclick.sh scannet
 #    bash scripts/train_oneclick.sh navi 5       # only run 5 epochs
+#
+#  Skip earlier steps (resume the pipeline mid-way):
+#    START_STEP=4 bash scripts/train_oneclick.sh navi          # start from training
+#    START_STEP=5 bash scripts/train_oneclick.sh navi          # skip train, eval latest ckpt
+#    START_STEP=7 bash scripts/train_oneclick.sh navi          # only per-epoch eval
+#    START_STEP=4 END_STEP=4 bash scripts/train_oneclick.sh navi   # train only
 # =====================================================================
 set -euo pipefail
 
 DATASET=${1:-navi}
 EPOCHS=${2:-15}
+
+# Step gating: which steps to run. Default = full pipeline (1..7).
+# Override via env: START_STEP=4 (skip 1..3), END_STEP=6 (skip 7), etc.
+START_STEP=${START_STEP:-1}
+END_STEP=${END_STEP:-7}
+
+# Helper: returns 0 (success) if step $1 should be executed.
+run_step() {
+    local s=$1
+    [ "$s" -ge "$START_STEP" ] && [ "$s" -le "$END_STEP" ]
+}
 
 # In tiny mode we override epochs to a small value if user didn't pass one.
 if [ "$DATASET" = "tiny" ] && [ -z "${2:-}" ]; then
@@ -135,6 +152,7 @@ echo "  Weights dir  : $WEIGHTS_DIR"
 echo "  Epochs       : $EPOCHS"
 echo "  Img size     : $IMG_SIZE"
 echo "  LoRA rank    : $LORA_RANK"
+echo "  Steps        : ${START_STEP}..${END_STEP}"
 echo "===================================================================="
 
 # ---------------------------------------------------------------------
@@ -156,6 +174,7 @@ echo "[env] Python: $($PY --version 2>&1) ($PY)"
 # ---------------------------------------------------------------------
 #  Step 1 — verify deps (do NOT silently install; user runs setup_env.sh)
 # ---------------------------------------------------------------------
+if run_step 1; then
 echo ""
 echo "[1/7] Verifying Python deps..."
 $PY - <<'PY'
@@ -176,6 +195,10 @@ if missing:
     print("Run: bash scripts/setup_env.sh")
     sys.exit(1)
 PY
+else
+    echo ""
+    echo "[1/7] SKIPPED (START_STEP=$START_STEP)"
+fi
 
 # ---------------------------------------------------------------------
 #  Step 1.5 — auto-generate tiny synthetic dataset if needed
@@ -196,6 +219,7 @@ fi
 # ---------------------------------------------------------------------
 #  Step 2 — zero-shot extraction + MNN matching
 # ---------------------------------------------------------------------
+if run_step 2; then
 echo ""
 echo "[2/7] Zero-shot feature extraction + MNN matching → $MNN_ZS"
 $PY -m finetune.extract_and_match_hf \
@@ -205,10 +229,15 @@ $PY -m finetune.extract_and_match_hf \
     --output_dir "$MNN_ZS" \
     --img_size "$IMG_SIZE" \
     --eval_resize "$EVAL_W" "$EVAL_H"
+else
+    echo ""
+    echo "[2/7] SKIPPED"
+fi
 
 # ---------------------------------------------------------------------
 #  Step 3 — zero-shot evaluation
 # ---------------------------------------------------------------------
+if run_step 3; then
 echo ""
 echo "[3/7] Zero-shot evaluation → $EVAL_ZS"
 mkdir -p "$EVAL_ZS"
@@ -219,10 +248,15 @@ $PY evaluate/evaluate_csv_essential.py \
     --output_dir "$EVAL_ZS" \
     --resize "$EVAL_W" "$EVAL_H" || \
     echo "  (evaluate script returned non-zero — inspect $EVAL_ZS)"
+else
+    echo ""
+    echo "[3/7] SKIPPED"
+fi
 
 # ---------------------------------------------------------------------
 #  Step 4 — LoRA fine-tune
 # ---------------------------------------------------------------------
+if run_step 4; then
 echo ""
 echo "[4/7] LoRA fine-tuning → $OUT_LORA"
 $PY -m finetune.train_lora_hf \
@@ -237,14 +271,24 @@ $PY -m finetune.train_lora_hf \
     --img_size "$IMG_SIZE" \
     --lora_rank "$LORA_RANK" \
     --lora_alpha "$LORA_ALPHA"
+else
+    echo ""
+    echo "[4/7] SKIPPED"
+fi
 
 CKPT="$OUT_LORA/checkpoint_latest.pth"
 
 # ---------------------------------------------------------------------
 #  Step 5 — fine-tuned extraction + MNN matching
 # ---------------------------------------------------------------------
+if run_step 5; then
 echo ""
 echo "[5/7] Fine-tuned feature extraction (latest ckpt) → $MNN_FT"
+if [ ! -f "$CKPT" ]; then
+    echo "  [error] checkpoint not found: $CKPT"
+    echo "          Run step 4 first, or check $OUT_LORA"
+    exit 1
+fi
 $PY -m finetune.extract_and_match_hf \
     --weights_dir "$WEIGHTS_DIR" \
     --checkpoint "$CKPT" \
@@ -255,10 +299,15 @@ $PY -m finetune.extract_and_match_hf \
     --output_dir "$MNN_FT" \
     --img_size "$IMG_SIZE" \
     --eval_resize "$EVAL_W" "$EVAL_H"
+else
+    echo ""
+    echo "[5/7] SKIPPED"
+fi
 
 # ---------------------------------------------------------------------
 #  Step 6 — fine-tuned evaluation (using checkpoint_latest.pth)
 # ---------------------------------------------------------------------
+if run_step 6; then
 echo ""
 echo "[6/7] Fine-tuned evaluation (latest ckpt) → $EVAL_FT"
 mkdir -p "$EVAL_FT"
@@ -269,6 +318,10 @@ $PY evaluate/evaluate_csv_essential.py \
     --output_dir "$EVAL_FT" \
     --resize "$EVAL_W" "$EVAL_H" || \
     echo "  (evaluate script returned non-zero — inspect $EVAL_FT)"
+else
+    echo ""
+    echo "[6/7] SKIPPED"
+fi
 
 # ---------------------------------------------------------------------
 #  Step 7 — per-epoch evaluation
@@ -282,10 +335,11 @@ $PY evaluate/evaluate_csv_essential.py \
 #      ├── epoch001/...
 #      └── summary.tsv               ← one row per epoch (key metrics)
 # ---------------------------------------------------------------------
+SUMMARY_TSV="$EVAL_PER_EPOCH/summary.tsv"
+if run_step 7; then
 echo ""
 echo "[7/7] Per-epoch evaluation → $EVAL_PER_EPOCH"
 mkdir -p "$EVAL_PER_EPOCH"
-SUMMARY_TSV="$EVAL_PER_EPOCH/summary.tsv"
 echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
 
 shopt -s nullglob
@@ -366,6 +420,10 @@ PY
     echo "  Per-epoch summary written to: $SUMMARY_TSV"
     echo "  ──────── summary preview ────────"
     column -t -s $'\t' "$SUMMARY_TSV" || cat "$SUMMARY_TSV"
+fi
+else
+    echo ""
+    echo "[7/7] SKIPPED"
 fi
 
 echo ""
