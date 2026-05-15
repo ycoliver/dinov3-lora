@@ -7,8 +7,9 @@
 #    [2] Zero-shot feature extraction + MNN matching       (baseline)
 #    [3] Zero-shot evaluation                              (baseline metrics)
 #    [4] LoRA fine-tune                                    (training)
-#    [5] Fine-tuned feature extraction + MNN matching
-#    [6] Fine-tuned evaluation                             (final metrics)
+#    [5] Fine-tuned feature extraction + MNN matching      (latest ckpt)
+#    [6] Fine-tuned evaluation                             (latest-ckpt metrics)
+#    [7] Per-epoch evaluation                              (curve over training)
 #
 #  All produced metrics live under `evaluate/<dataset>_(hf|hf_lora)/`,
 #  drop-in compatible with the existing zero-shot folders.
@@ -37,10 +38,10 @@ cd "$PROJECT_ROOT"
 
 WEIGHTS_DIR="dinov3_weights"
 IMG_SIZE=448
-BATCH_SIZE=1
-LR=1e-3
+BATCH_SIZE=8
+LR=4e-3
 LORA_RANK=4
-LORA_ALPHA=1.0
+LORA_ALPHA=8.0
 
 # Per-dataset settings
 case "$DATASET" in
@@ -121,6 +122,7 @@ MNN_ZS="${OUT_ROOT}/mnn_zeroshot"
 MNN_FT="${OUT_ROOT}/mnn_finetuned"
 EVAL_ZS="${OUT_ROOT}/eval_zeroshot"
 EVAL_FT="${OUT_ROOT}/eval_finetuned"
+EVAL_PER_EPOCH="${OUT_ROOT}/eval_per_epoch"
 mkdir -p "$OUT_ROOT"
 
 echo "===================================================================="
@@ -155,7 +157,7 @@ echo "[env] Python: $($PY --version 2>&1) ($PY)"
 #  Step 1 — verify deps (do NOT silently install; user runs setup_env.sh)
 # ---------------------------------------------------------------------
 echo ""
-echo "[1/6] Verifying Python deps..."
+echo "[1/7] Verifying Python deps..."
 $PY - <<'PY'
 import importlib, sys
 need = ["torch", "torchvision", "transformers", "safetensors",
@@ -195,7 +197,7 @@ fi
 #  Step 2 — zero-shot extraction + MNN matching
 # ---------------------------------------------------------------------
 echo ""
-echo "[2/6] Zero-shot feature extraction + MNN matching → $MNN_ZS"
+echo "[2/7] Zero-shot feature extraction + MNN matching → $MNN_ZS"
 $PY -m finetune.extract_and_match_hf \
     --weights_dir "$WEIGHTS_DIR" \
     --pairs "$EVAL_PAIRS" \
@@ -208,7 +210,7 @@ $PY -m finetune.extract_and_match_hf \
 #  Step 3 — zero-shot evaluation
 # ---------------------------------------------------------------------
 echo ""
-echo "[3/6] Zero-shot evaluation → $EVAL_ZS"
+echo "[3/7] Zero-shot evaluation → $EVAL_ZS"
 mkdir -p "$EVAL_ZS"
 $PY evaluate/evaluate_csv_essential.py \
     --input_pairs "$EVAL_PAIRS" \
@@ -222,7 +224,7 @@ $PY evaluate/evaluate_csv_essential.py \
 #  Step 4 — LoRA fine-tune
 # ---------------------------------------------------------------------
 echo ""
-echo "[4/6] LoRA fine-tuning → $OUT_LORA"
+echo "[4/7] LoRA fine-tuning → $OUT_LORA"
 $PY -m finetune.train_lora_hf \
     --weights_dir "$WEIGHTS_DIR" \
     --train_pairs "$TRAIN_PAIRS" \
@@ -242,7 +244,7 @@ CKPT="$OUT_LORA/checkpoint_latest.pth"
 #  Step 5 — fine-tuned extraction + MNN matching
 # ---------------------------------------------------------------------
 echo ""
-echo "[5/6] Fine-tuned feature extraction → $MNN_FT"
+echo "[5/7] Fine-tuned feature extraction (latest ckpt) → $MNN_FT"
 $PY -m finetune.extract_and_match_hf \
     --weights_dir "$WEIGHTS_DIR" \
     --checkpoint "$CKPT" \
@@ -255,10 +257,10 @@ $PY -m finetune.extract_and_match_hf \
     --eval_resize "$EVAL_W" "$EVAL_H"
 
 # ---------------------------------------------------------------------
-#  Step 6 — fine-tuned evaluation
+#  Step 6 — fine-tuned evaluation (using checkpoint_latest.pth)
 # ---------------------------------------------------------------------
 echo ""
-echo "[6/6] Fine-tuned evaluation → $EVAL_FT"
+echo "[6/7] Fine-tuned evaluation (latest ckpt) → $EVAL_FT"
 mkdir -p "$EVAL_FT"
 $PY evaluate/evaluate_csv_essential.py \
     --input_pairs "$EVAL_PAIRS" \
@@ -268,9 +270,108 @@ $PY evaluate/evaluate_csv_essential.py \
     --resize "$EVAL_W" "$EVAL_H" || \
     echo "  (evaluate script returned non-zero — inspect $EVAL_FT)"
 
+# ---------------------------------------------------------------------
+#  Step 7 — per-epoch evaluation
+#
+#  Iterate over every checkpoint_epoch*.pth produced during training,
+#  run extract+evaluate for each, then summarise into a single table:
+#
+#    output/<dataset>/eval_per_epoch/
+#      ├── epoch000/                 ← extract MNN csvs
+#      │   └── eval/                 ← evaluation_results.txt
+#      ├── epoch001/...
+#      └── summary.tsv               ← one row per epoch (key metrics)
+# ---------------------------------------------------------------------
+echo ""
+echo "[7/7] Per-epoch evaluation → $EVAL_PER_EPOCH"
+mkdir -p "$EVAL_PER_EPOCH"
+SUMMARY_TSV="$EVAL_PER_EPOCH/summary.tsv"
+echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
+
+shopt -s nullglob
+CKPT_LIST=( "$OUT_LORA"/checkpoint_epoch*.pth )
+shopt -u nullglob
+
+if [ ${#CKPT_LIST[@]} -eq 0 ]; then
+    echo "  [warn] No checkpoint_epoch*.pth found in $OUT_LORA — skipping per-epoch eval."
+else
+    echo "  Found ${#CKPT_LIST[@]} epoch checkpoints."
+    for CKPT_E in "${CKPT_LIST[@]}"; do
+        # Extract the 3-digit epoch number from filename: checkpoint_epoch007.pth → 007
+        FNAME=$(basename "$CKPT_E")
+        EPOCH_TAG="${FNAME#checkpoint_epoch}"
+        EPOCH_TAG="${EPOCH_TAG%.pth}"
+        EP_DIR="$EVAL_PER_EPOCH/epoch${EPOCH_TAG}"
+        EP_EVAL_DIR="$EP_DIR/eval"
+        mkdir -p "$EP_EVAL_DIR"
+
+        echo ""
+        echo "  ── epoch ${EPOCH_TAG} ──────────────────────────────"
+        echo "  ckpt : $CKPT_E"
+        echo "  out  : $EP_DIR"
+
+        # 7a. extract + MNN match for this epoch
+        $PY -m finetune.extract_and_match_hf \
+            --weights_dir "$WEIGHTS_DIR" \
+            --checkpoint "$CKPT_E" \
+            --lora_rank "$LORA_RANK" \
+            --lora_alpha "$LORA_ALPHA" \
+            --pairs "$EVAL_PAIRS" \
+            --data_root "$DATA_ROOT" \
+            --output_dir "$EP_DIR" \
+            --img_size "$IMG_SIZE" \
+            --eval_resize "$EVAL_W" "$EVAL_H" || {
+                echo "  [warn] extract failed for epoch ${EPOCH_TAG}, skipping eval."
+                continue
+            }
+
+        # 7b. evaluate
+        $PY evaluate/evaluate_csv_essential.py \
+            --input_pairs "$EVAL_PAIRS" \
+            --input_dir "$DATA_ROOT" \
+            --input_csv_dir "$EP_DIR" \
+            --output_dir "$EP_EVAL_DIR" \
+            --resize "$EVAL_W" "$EVAL_H" || {
+                echo "  [warn] evaluate returned non-zero for epoch ${EPOCH_TAG}"
+            }
+
+        # 7c. parse evaluation_results.txt → one row in summary.tsv
+        RES="$EP_EVAL_DIR/evaluation_results.txt"
+        if [ -f "$RES" ]; then
+            $PY - "$RES" "$EPOCH_TAG" "$SUMMARY_TSV" <<'PY'
+import re, sys
+res_path, epoch_tag, summary_path = sys.argv[1:4]
+text = open(res_path, "r", errors="ignore").read()
+
+def grab(pattern, default="-"):
+    m = re.search(pattern, text, re.IGNORECASE)
+    return m.group(1) if m else default
+
+auc5  = grab(r"AUC@5[^0-9\-]*([0-9.]+)")
+auc10 = grab(r"AUC@10[^0-9\-]*([0-9.]+)")
+auc20 = grab(r"AUC@20[^0-9\-]*([0-9.]+)")
+prec  = grab(r"Precision[^0-9\-]*([0-9.]+)")
+rec   = grab(r"Recall[^0-9\-]*([0-9.]+)")
+
+with open(summary_path, "a") as f:
+    f.write(f"{epoch_tag}\t{auc5}\t{auc10}\t{auc20}\t{prec}\t{rec}\n")
+print(f"  summary  : auc@5={auc5}  auc@10={auc10}  auc@20={auc20}  P={prec}  R={rec}")
+PY
+        else
+            echo "  [warn] $RES not found, summary row skipped."
+            echo -e "${EPOCH_TAG}\t-\t-\t-\t-\t-" >> "$SUMMARY_TSV"
+        fi
+    done
+    echo ""
+    echo "  Per-epoch summary written to: $SUMMARY_TSV"
+    echo "  ──────── summary preview ────────"
+    column -t -s $'\t' "$SUMMARY_TSV" || cat "$SUMMARY_TSV"
+fi
+
 echo ""
 echo "===================================================================="
 echo "  DONE."
 echo "  Zero-shot results : $EVAL_ZS/evaluation_results.txt"
 echo "  Fine-tuned results: $EVAL_FT/evaluation_results.txt"
+echo "  Per-epoch summary : $SUMMARY_TSV"
 echo "===================================================================="

@@ -29,7 +29,7 @@ WARMUP_EPOCHS = 2
 TEMPERATURE = 0.07             # InfoNCE temperature
 IMG_SIZE = 448                 # 448 = 28*16, safe for 8GB VRAM
 NUM_WORKERS = 0                # Windows compatibility
-SAVE_EVERY = 5                 # save checkpoint every N epochs
+SAVE_EVERY = 1                 # save checkpoint every N epochs (每个 epoch 一次)
 LOG_EVERY = 10                 # print loss every N steps
 
 # ── Correspondence ───────────────────────────────────────────────────
