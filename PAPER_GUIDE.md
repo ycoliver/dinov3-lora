@@ -160,3 +160,103 @@ bash scripts/run_diagnostics.sh
 | 一键诊断出图 | [`scripts/run_diagnostics.sh`](scripts/run_diagnostics.sh)、[`analysis.sh`](analysis.sh) |
 | 论文正式稿 | [`main_refine.tex`](main_refine.tex) |
 | 仓库地图 | [`readme.txt`](readme.txt) |
+
+---
+
+## 9. 迁移到 CVPR 模板的 Checklist
+
+> 当前 [`main_refine.tex`](main_refine.tex) 用的是 `article` + `biblatex+ieee`，单栏 A4，方便课程报告阅读。一旦要投 CVPR/ICCV，必须按下面 4 层 checklist 逐项过一遍——**任何一项漏掉都可能在 desk reject 阶段被刷**。
+
+### 9.1 格式层（机械改动，1 小时内可完成）
+
+- [ ] **替换 documentclass**：`\documentclass[11pt,a4paper]{article}` → `\documentclass[10pt,twocolumn,letterpaper]{article}`，并 `\usepackage{cvpr}`（或 `iccv`）。
+- [ ] **匿名提交**：投稿稿用 `\usepackage[review]{cvpr}`，camera-ready 用 `\usepackage{cvpr}`；同时要设置 `\def\cvprPaperID{****}` 和 `\def\confName{CVPR}` / `\def\confYear{2026}`。
+- [ ] **去掉 title page**：CVPR 模板没有 `titlepage` 环境，`\title` + `\author` + `\maketitle` 直接落在第一页正文上方。
+- [ ] **删掉课程信息**：当前 title page 写有 *The Chinese University of Hong Kong, Shenzhen / Image Processing and Computer Vision --- Course Project / April 2026*——这些在双盲审稿期是 **identity leak**，必须删除或替换为 `\author{Anonymous CVPR submission}`。
+- [ ] **页数限制**：CVPR 投稿正文 **8 页**（refs 不计页数），rebuttal/最终稿 9 页。当前稿件 22 页 → 必须大幅压缩；具体压缩策略见 §9.3。
+- [ ] **去掉自定义包**：`fancyhdr`、`titlesec`、`microtype`、`enumitem`、`captionsetup{...}`、`\titleformat{...}` 这些会和 `cvpr.sty` 冲突，全部移除。
+- [ ] **bib 切换**：`biblatex+ieee` → 改为 `\usepackage[numbers,sort]{natbib}` + `\bibliographystyle{ieee_fullname}`（CVPR 官方 bst）。`\printbibliography` 替换为 `\bibliography{references}`。
+- [ ] **图表跨栏**：所有 `\begin{figure}[H]` 在双栏下会变得只有半栏宽。
+   - 单栏小图：保持 `figure`（默认半栏）。
+   - 论文核心大图（如 `per_epoch_small_vs_middle.png`、PCA 对比图）：改为 `figure*` 跨双栏。
+   - 表 `\begin{table}[H]` 同理：跨栏宽表用 `table*`。
+- [ ] **公式编号收紧**：CVPR 双栏空间紧张，`\setlength{\abovedisplayskip}{...}` 这种自定义间距全部去掉，让 `cvpr.sty` 自己控制。
+
+### 9.2 结构层（章节重排，1～2 天）
+
+CVPR 标准结构 vs 当前 refine 稿：
+
+| CVPR 标准节 | 当前 refine 是否有 | 缺什么 / 要改什么 |
+|---|---|---|
+| **Abstract**（独立段，正文前） | ❌ 当前是 title page 上的一段 | 抽出来，控制在 200 词内，砍掉课程语境 |
+| **1. Introduction** | ✅ §1 | 砍掉 Result Overview 的彩色框（CVPR 风格不允许 `\color{green!55!black}`） |
+| **2. Related Work** | ❌ **完全没有** | **必须新增**——见 §9.3 第 1 条 |
+| **3. Method** | ✅ §2 + §3 | 把 §2 *Technical Foundation* 中"教科书内容"（self-attention 公式、LoRA 公式定义）压缩或挪到 supplementary，只留本文真正用到的差异点 |
+| **4. Experiments** | ✅ §4 | 把 *Dataset and Evaluation Protocol* 从 §2 末尾迁过来作为 §4.1；§4.4 *Diagnostic Analysis* 大量图表压缩或挪 supplementary |
+| **5. Conclusion** | ✅ §5 | 保留，但 limitations 列表合并进 conclusion 末段 |
+| **References** | ✅ | 切 bst，控制 50 条以内 |
+| **Supplementary**（独立 PDF） | ❌ 没有 | **必须新建**——见 §9.4 |
+
+### 9.3 内容层（最重要，决定接收概率）
+
+#### 1. **新增 Related Work**（CVPR 强制要求，缺这节会被秒拒）
+
+至少覆盖三条线：
+- **Self-supervised vision foundation models**：DINO~\cite{dino}、DINOv2~\cite{dinov2}、DINOv3、MAE、CLIP（解释为何选 DINOv3 作为 backbone）。
+- **Parameter-efficient fine-tuning**：LoRA~\cite{lora}、Adapter、Prefix-tuning、IA3、QLoRA（解释为何选 LoRA 在 Q/V）。
+- **Local feature matching & camera pose**：SIFT、SuperPoint、SuperGlue~\cite{superglue}、LoFTR、RoMa、DKM、MASt3R（**这一段是最缺的**——审稿人会问 "为什么不直接用 LoFTR/RoMa"，必须正面回应：本文是"在冻结的通用 backbone 上做最小化改造"，与专用 matcher 是正交方向）。
+
+#### 2. **新增 Implementation Details 子节**（在 Experiments 开头）
+
+CVPR 审稿人通常会按 checklist 找这些数字，refine 稿里散落各处，需要集中：
+- 硬件：1× / 2× / 4× A100/H100，显存占用。
+- Wall-clock：S/16 ≈ 5.5 h / 15 epoch；L/16 ≈ ?
+- 随机种子（split_seed=12345，已写入 §2.7）；训练 seed。
+- 软件版本：PyTorch X.Y、HuggingFace transformers Z、CUDA W。
+- 推理 batch / 评估 batch。
+
+#### 3. **强化 Comparison Table**（当前最弱的一项）
+
+现状只对比 zero-shot vs LoRA。CVPR 期待至少：
+- 与 **DINOv2 + LoRA** 对比（说明 DINOv3 不是天然更优）。
+- 与 **SuperPoint / LoFTR / DKM** 在 NAVI 上的零样本数字（即使你不微调它们，也要把别人 paper 报的数字列上）。
+- 至少一个 **多场景数据集**（MegaDepth-1500 或 ScanNet-1500）的弱结果——哪怕只是 zero-shot generalization，也比"只跑 NAVI"强很多。
+- 如果实在没资源，至少要在 limitations 里点名说明这是 future work。
+
+#### 4. **诚实承认 vs CVPR 风格**
+
+当前 refine 稿大段写"AUC@5 不涨 / PCA 不变"——这种"过度诚实"在课程报告里很好，**但 CVPR 审稿人会读成"这工作没用"**。在 CVPR 版应当：
+- 把 *Limitations* 缩成 1 段、放在 Conclusion 之前，而不是单独一节。
+- 把"PCA 几乎不变"重新 frame 为 "**LoRA preserves DINOv3's pretrained representation while reshaping its decision boundary**"——同样的事实，CVPR 友好的叙述。
+- 把"AUC@5 不涨"放到 limitations 一句话带过，重点突出 AUC@20 / Precision 的稳健提升。
+
+#### 5. **figure 重新做**
+
+- `bars_summary_*.png` 那种 6 个柱状图叠在一起的图，在双栏里**完全看不清**——必须每个指标拆成单独子图，或合并成 1 张紧凑表格。
+- `pca_*_compare.png` 在双栏下尺寸刚好，但要加文字标注指出"差异区域"，否则审稿人看完会得出"两图一样 → 这工作没效果"的结论。
+- `per_epoch_small_vs_middle.png` 是最重要的图，建议升格为 `figure*` 跨栏。
+
+### 9.4 Supplementary Material（独立 PDF，不计入 8 页）
+
+CVPR 允许任意长度的 supplementary，把 refine 稿被砍掉的内容大部分挪过去：
+
+- 完整的 §2 *Technical Foundation*（self-attention / LoRA / InfoNCE 教科书部分）。
+- §4.4 全部诊断图（hist_intra、hist_pos、bars_summary、layer4_*）。
+- 所有 NAVI 场景的 PCA 对比图（不只 1 张）。
+- 训练曲线、loss 曲线、每 epoch 的完整数字表。
+- Hyperparameter sweep（如果做了）。
+- Failure cases 大图集合。
+
+### 9.5 一页提交 Checklist（直接打印贴电脑上）
+
+- [ ] 文档类切到 `cvpr.sty`，`\usepackage[review]{cvpr}` + PaperID 占位。
+- [ ] 删除所有 identity 信息（学校、课程、作者真名、私有 GitHub URL）。
+- [ ] Abstract 独立成段，≤ 200 词。
+- [ ] **Related Work 节存在且 ≥ 0.5 页**。
+- [ ] 8 页正文限制（用 `\pdfinfo{...}` 或 PDF 阅读器确认）。
+- [ ] 至少 1 张跨栏 figure（`figure*`）。
+- [ ] 所有 cite 改 `\cite{}`（`natbib`），不要 `\autocite`。
+- [ ] References 用 `ieee_fullname.bst`，条目数 30~60。
+- [ ] Supplementary PDF 单独打包。
+- [ ] PDF 通过 CVPR 模板自带的 `\pdfoutput=1` 与字体嵌入检查。
+- [ ] 投稿前用 CMT/OpenReview 的"匿名化检查"过一遍 PDF metadata。

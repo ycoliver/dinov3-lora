@@ -233,12 +233,62 @@ destroys the local manifold structure that DINOv3 already provides. We therefore
 \textbf{Safe Radius} of 5 patches: any patch whose 2D grid distance to the anchor is $\le 5$ is masked
 out of the contrastive computation.
 
-\subsection{Dataset: NAVI}
+\subsection{Dataset and Evaluation Protocol}
+\label{sec:dataset}
 
 NAVI~\cite{navi} is a single-object multi-view dataset with precise depth maps, allowing us to derive
-ground-truth dense patch correspondences via re-projection. We use the official train / test split:
-5{,}596 training pairs and 908 held-out test pairs. All images are processed with the longer side
-resized to 1024.
+ground-truth dense patch correspondences via re-projection. We use the v1.5 release, which contains
+324 \texttt{multiview\_*} scenes; \texttt{annotations.json} provides per-image camera intrinsics,
+extrinsics ($T_{w2c}$) and aligned depth maps.
+
+\paragraph{Train/test split.} NAVI v1.5 ships no per-image split labels, so we adopt a
+\emph{deterministic scene-level} split: a fixed seed (\texttt{split\_seed=12345}) shuffles the list
+of scenes and the last $15\%$ are reserved as the held-out test partition. Because every image of a
+scene is assigned entirely to one side, the resulting splits are \textbf{image-disjoint and
+scene-disjoint by construction}, which removes the most common form of evaluation leakage on
+single-object datasets.
+
+\paragraph{Pair generation.} For each scene we enumerate all view pairs and retain only those whose
+relative camera rotation angle lies in $[10^\circ, 90^\circ]$ --- pairs below $10^\circ$ are
+near-trivial duplicates, those above $90^\circ$ rarely share enough surface for dense matching. To
+prevent any single scene from dominating, we cap the number of pairs at $20$ per scene for training
+and $12$ per scene for testing. The resulting protocol yields
+\textbf{5{,}596 training pairs and 908 held-out test pairs} (Table~\ref{tab:split}).
+
+\begin{table}[H]
+\centering\small
+\caption{NAVI split used throughout this report. Train and test partitions are scene-disjoint by
+construction, so every image appearing in training is guaranteed not to appear at test time.}
+\label{tab:split}
+\begin{tabular}{@{}lcccl@{}}
+\toprule
+\textbf{Split} & \textbf{Scenes} & \textbf{Pairs} & \textbf{Cap / scene} & \textbf{Pair filter} \\
+\midrule
+Train & $\sim$275 (85\%) & 5{,}596 & 20 & \multirow{2}{*}{relative rotation $\in [10^\circ, 90^\circ]$} \\
+Test  & $\sim$49  (15\%) & 908     & 12 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Positive correspondences.} Given a training pair $(A, B)$ with depth maps and relative
+pose $T_{A\to B}$, every patch centre in $A$ is back-projected to 3D using $A$'s depth and
+re-projected into $B$; the symmetric procedure is then applied for $B \to A$. Patches whose
+mutual re-projection error stays below a fixed pixel threshold are kept as ground-truth positives;
+all other patches are eligible negatives.
+
+\paragraph{Image geometry.} All images are processed with the longer side resized to $1024$. With
+patch size $16\!\times\!16$ this yields a patch grid of $64\!\times\!64$ tokens for evaluation, on
+which both MNN matching and the Safe-Radius mask operate.
+
+\paragraph{Pose-evaluation pipeline.} Following the SuperGlue~\cite{superglue} protocol, on every
+test pair we (i) extract patch features, (ii) form mutual nearest-neighbor matches in feature space,
+(iii) estimate the Essential matrix $E$ with USAC~\cite{usac}, (iv) decompose $E$ into $(R, t)$ via
+SVD and the cheirality check~\cite{nister2004}, and (v) compute the angular pose error against
+ground truth. We report \textbf{AUC@}$5^\circ\!/10^\circ\!/20^\circ$ and \textbf{Precision}: the
+fraction of MNN matches whose Sampson distance under the ground-truth $E$ is below
+$5\!\times\!10^{-4}$ in the $1024^2$ evaluation coordinate system. The same pipeline is applied to
+the zero-shot DINOv3 baseline and to every LoRA checkpoint, so all reported gains are
+recipe-attributable.
 
 % ═══════════════════════════════ 3. METHOD ═══════════════════════
 \section{Method: LoRA + HardInfoNCE + Safe Radius}
@@ -253,23 +303,16 @@ frozen.
 transformer block. $B$ is zero-initialized so that the network reproduces the zero-shot output at
 step~0.
 
-\paragraph{Positive pairs.} For each NAVI training pair we re-project depth from view~A into view~B and
-keep all patches whose mutual re-projection error is below a fixed threshold; these are the positive
-correspondences.
-
 \paragraph{Negatives.} \texttt{batch\_size}\,$=$\,8 means InfoNCE's negatives are drawn from
 \emph{seven other scenes} per anchor (true cross-image negatives), filtered by the 5-patch Safe-Radius
-mask within the anchor's own image.
+mask within the anchor's own image. Positive correspondences are obtained as described in
+\S\ref{sec:dataset}.
 
 \paragraph{Loss.} HardInfoNCE with $\tau = 0.07$ and $K = 128$ hardest negatives per anchor.
 
 \paragraph{Optimizer.} AdamW with learning rate $1\!\times\!10^{-4}$, weight decay $1\!\times\!10^{-4}$,
-cosine schedule, 15 epochs total. Checkpoints saved every 3 epochs and evaluated on the full NAVI test
-split.
-
-\paragraph{Evaluation.} Identical to the zero-shot pipeline (MNN $\rightarrow$ USAC $\rightarrow$
-5-point pose decomposition). Evaluation coordinate system is $1024^2$ to match the NAVI native
-max-dimension; Precision uses the $5\!\times\!10^{-4}$ epipolar threshold.
+cosine schedule, 15 epochs total. Checkpoints saved every 3 epochs and evaluated on the full NAVI
+test split (\S\ref{sec:dataset}); the best epoch is selected by test Precision.
 
 % ═══════════════════════════════ 4. RESULTS ═══════════════════════
 \section{Results}
