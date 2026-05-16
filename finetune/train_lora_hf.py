@@ -43,6 +43,7 @@ sys.stdout.reconfigure(line_buffering=True)
 from .config import LOG_EVERY, SAVE_EVERY
 from .model_hf import DINOv3HFBackbone
 from .lora_hf import inject_lora_hf, get_lora_parameters, DEFAULT_HF_TARGETS
+from .model import ProjectionHead   # Phase 1: 1024->mid->256, L2-normalised
 from .dataset import MatchingPairDataset, collate_matching_pairs
 from .loss import MatchingLoss
 
@@ -103,6 +104,67 @@ class LoRADINOv3MatcherHF(nn.Module):
     def get_patch_coords(self, H: int, W: int) -> torch.Tensor:
         return self.backbone.get_patch_coords(H, W)
 
+# =====================================================================
+#  Phase 1: Frozen backbone + Projection Head + plain InfoNCE
+#  (Reproduces the "Catastrophic Collapse" experiment from main.tex §3.2.)
+#
+#  - Backbone is fully frozen (no LoRA, requires_grad=False everywhere).
+#  - A randomly-initialised ProjectionHead (embed_dim -> mid -> 256, L2-norm)
+#    sits on top of the patch tokens and is the ONLY trainable component.
+#  - Loss: plain InfoNCE (no Hard-mining, no Safe Radius). The expected
+#    collapse signature is contrastive loss → ln(N_negatives + 1).
+# =====================================================================
+
+class Phase1ProjHeadMatcherHF(nn.Module):
+    """Frozen HF DINOv3 backbone + trainable ProjectionHead (Phase 1)."""
+
+    def __init__(
+        self,
+        weights_dir: str,
+        proj_dim: int = 256,
+    ):
+        super().__init__()
+        self.backbone = DINOv3HFBackbone(weights_dir=weights_dir)
+
+        # Freeze the entire backbone.
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+        self.backbone.eval()  # also disable any train-time stochastic ops
+
+        # Projection head is the only trainable module.
+        self.proj_head = ProjectionHead(
+            in_dim=self.backbone.embed_dim, proj_dim=proj_dim,
+        )
+        self.proj_dim = proj_dim
+
+        n_train = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in self.parameters())
+        print(
+            f"[Phase1] Trainable: {n_train/1e6:.3f}M / {n_total/1e6:.1f}M "
+            f"params ({100*n_train/n_total:.3f}%) — ProjectionHead only"
+        )
+
+        # Convenience accessors used by the dataset / loss / extract code.
+        self.patch_size: int = self.backbone.patch_size
+        self.embed_dim: int = self.proj_dim   # downstream sees 256-D feats
+
+    def train(self, mode: bool = True):
+        # Keep the frozen backbone in eval() always; let only the head
+        # follow the standard train/eval toggle. (matters if HF backbone
+        # ever introduces dropout-like layers.)
+        super().train(mode)
+        self.backbone.eval()
+        return self
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Returns `(B, num_patches, proj_dim)` L2-normalised descriptors."""
+        with torch.no_grad():
+            patch_tokens = self.backbone(x)                  # (B, N, D)
+        return self.proj_head(patch_tokens)                  # (B, N, proj_dim)
+
+    @torch.no_grad()
+    def get_patch_coords(self, H: int, W: int) -> torch.Tensor:
+        return self.backbone.get_patch_coords(H, W)
 
 # =====================================================================
 #  CLI
@@ -141,6 +203,12 @@ def get_args():
                    help="0.0 disables the redundancy-reduction term (default).")
     p.add_argument("--no_hard_negatives", action="store_true",
                    help="Use plain InfoNCE instead of HardInfoNCE.")
+    # Phase 1 mode (frozen backbone + ProjectionHead + plain InfoNCE)
+    p.add_argument("--phase1", action="store_true",
+                   help="Phase 1: frozen backbone + random-init ProjectionHead. "
+                        "Disables LoRA. Forces plain InfoNCE (no Safe Radius).")
+    p.add_argument("--proj_dim", type=int, default=256,
+                   help="ProjectionHead output dim (Phase 1 only).")
     # Misc
     p.add_argument("--resume", type=str, default="")
     p.add_argument("--gpu", type=int, default=0)
@@ -282,13 +350,24 @@ def main():
     )
 
     # Build model
-    print("Building LoRA-HF model...")
-    model = LoRADINOv3MatcherHF(
-        weights_dir=args.weights_dir,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_targets=tuple(args.lora_targets),
-    ).to(device)
+    if args.phase1:
+        print("Building Phase 1 model (frozen backbone + ProjectionHead)...")
+        model = Phase1ProjHeadMatcherHF(
+            weights_dir=args.weights_dir,
+            proj_dim=args.proj_dim,
+        ).to(device)
+        # Phase 1 fidelity to main.tex §3.2: plain InfoNCE, no Safe Radius.
+        if not args.no_hard_negatives:
+            print("[Phase1] Forcing --no_hard_negatives (plain InfoNCE).")
+            args.no_hard_negatives = True
+    else:
+        print("Building LoRA-HF model...")
+        model = LoRADINOv3MatcherHF(
+            weights_dir=args.weights_dir,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_targets=tuple(args.lora_targets),
+        ).to(device)
 
     if args.img_size % model.patch_size != 0:
         raise ValueError(
@@ -321,14 +400,21 @@ def main():
         diversity_weight=args.diversity_weight,   # default 0.0
     )
 
-    # Optimiser — only LoRA parameters
-    lora_params = get_lora_parameters(model)
-    if not lora_params:
-        raise RuntimeError(
-            "No LoRA parameters found. Did `inject_lora_hf` succeed?"
-        )
+    # Optimiser — LoRA params (default) or ProjectionHead params (phase1)
+    if args.phase1:
+        train_params = list(model.proj_head.parameters())
+        if not train_params:
+            raise RuntimeError("Phase 1: ProjectionHead has no parameters?!")
+        print(f"[Phase1] Optimising {len(train_params)} ProjectionHead tensors "
+              f"({sum(p.numel() for p in train_params)/1e6:.3f}M params)")
+    else:
+        train_params = get_lora_parameters(model)
+        if not train_params:
+            raise RuntimeError(
+                "No LoRA parameters found. Did `inject_lora_hf` succeed?"
+            )
     optimizer = optim.AdamW(
-        lora_params, lr=args.lr, weight_decay=args.weight_decay,
+        train_params, lr=args.lr, weight_decay=args.weight_decay,
     )
 
     # Cosine LR with warm-up
@@ -359,13 +445,20 @@ def main():
 
     # Banner
     print("\n" + "=" * 60)
-    print(f"  LoRA-HF Training: {args.epochs} epochs")
-    print(f"  Pairs: {len(dataset)} | Batch size: {args.batch_size}")
-    print(f"  LR: {args.lr} | Rank: {args.lora_rank} "
-          f"| Alpha: {args.lora_alpha}")
-    print(f"  Targets: {args.lora_targets}")
-    print(f"  Feature dim: {model.embed_dim} (native HF DINOv3, no proj head)")
+    if args.phase1:
+        print(f"  Phase 1 Training: {args.epochs} epochs (frozen + ProjHead)")
+        print(f"  Pairs: {len(dataset)} | Batch size: {args.batch_size}")
+        print(f"  LR: {args.lr} | proj_dim: {args.proj_dim}")
+        print(f"  Feature dim: {model.embed_dim} (ProjectionHead output)")
+    else:
+        print(f"  LoRA-HF Training: {args.epochs} epochs")
+        print(f"  Pairs: {len(dataset)} | Batch size: {args.batch_size}")
+        print(f"  LR: {args.lr} | Rank: {args.lora_rank} "
+              f"| Alpha: {args.lora_alpha}")
+        print(f"  Targets: {args.lora_targets}")
+        print(f"  Feature dim: {model.embed_dim} (native HF DINOv3, no proj head)")
     print(f"  Img size: {args.img_size} (patch={model.patch_size})")
+    print(f"  Loss: {'plain InfoNCE' if args.no_hard_negatives else 'HardInfoNCE+SafeRadius'}")
     print(f"  Diversity weight: {args.diversity_weight}")
     print(f"  Warmup steps: {warmup_steps} | Total steps: {total_steps}")
     print("=" * 60 + "\n")
@@ -401,12 +494,21 @@ def main():
                 "optimizer_state_dict": optimizer.state_dict(),
                 "metrics": metrics,
                 "args": vars(args),
-                "lora_config": {
+            }
+            if args.phase1:
+                # Mark this checkpoint as a Phase-1 (ProjectionHead) ckpt so
+                # extract_and_match_hf.py can load it correctly.
+                ckpt["phase1"] = True
+                ckpt["phase1_config"] = {
+                    "proj_dim": args.proj_dim,
+                    "embed_dim": int(model.backbone.embed_dim),
+                }
+            else:
+                ckpt["lora_config"] = {
                     "rank": args.lora_rank,
                     "alpha": args.lora_alpha,
                     "targets": list(args.lora_targets),
-                },
-            }
+                }
             path = output_dir / f"checkpoint_epoch{epoch:03d}.pth"
             torch.save(ckpt, path)
             torch.save(ckpt, output_dir / "checkpoint_latest.pth")

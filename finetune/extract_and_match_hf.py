@@ -52,6 +52,7 @@ sys.stdout.reconfigure(line_buffering=True)
 
 from .model_hf import DINOv3HFBackbone
 from .lora_hf import inject_lora_hf, DEFAULT_HF_TARGETS
+from .model import ProjectionHead   # for phase1 ckpts
 
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -210,34 +211,100 @@ def parse_pairs(path: str):
 # ═════════════════════════════════════════════════════════════════════
 
 def build_model(args, device):
-    """Build the HF DINOv3 backbone, optionally apply LoRA + ckpt."""
+    """Build the HF DINOv3 backbone, optionally apply LoRA + ckpt.
+
+    Returns either:
+      - the bare backbone (whose `forward` yields L2-normalised patch tokens), or
+      - a small wrapper module that runs `proj_head(backbone(x))` for Phase 1
+        checkpoints (frozen backbone + ProjectionHead).
+    The returned module exposes `.patch_size`, `.embed_dim`, `.get_patch_coords`
+    so the rest of the script doesn't care which one it is.
+    """
     backbone = DINOv3HFBackbone(weights_dir=args.weights_dir)
-    if args.checkpoint:
-        # Re-inject LoRA before loading state-dict.
-        inject_lora_hf(
-            backbone.hf_model,
-            rank=args.lora_rank,
-            alpha=args.lora_alpha,
-            target_modules=tuple(args.lora_targets),
+
+    # ---- Zero-shot fast-path: nothing to load. ----
+    if not args.checkpoint:
+        return backbone.to(device).eval()
+
+    # ---- Detect checkpoint type (phase1 vs LoRA). ----
+    ckpt = torch.load(args.checkpoint, map_location="cpu")
+    is_phase1 = bool(ckpt.get("phase1", False))
+    if not is_phase1:
+        # Some older ckpts don't carry the explicit flag but DO carry the
+        # phase1_config block produced by `args.phase1`.
+        is_phase1 = isinstance(ckpt.get("phase1_config"), dict)
+
+    sd = ckpt.get("model_state_dict", ckpt)
+
+    if is_phase1:
+        proj_dim = (
+            ckpt.get("phase1_config", {}).get("proj_dim")
+            or ckpt.get("args", {}).get("proj_dim")
+            or 256
         )
-        ckpt = torch.load(args.checkpoint, map_location="cpu")
-        sd = ckpt.get("model_state_dict", ckpt)
-        # The training wrapper saves keys as `backbone.hf_model.*`,
-        # strip the wrapper prefix so we can load into the bare backbone.
-        sd_clean = {}
+        proj_head = ProjectionHead(
+            in_dim=backbone.embed_dim, proj_dim=proj_dim,
+        )
+        # The training wrapper saves keys as `backbone.hf_model.*` and
+        # `proj_head.*`. Split them and load each into the right submodule.
+        bb_sd = {}
+        ph_sd = {}
         for k, v in sd.items():
             if k.startswith("backbone."):
-                sd_clean[k[len("backbone."):]] = v
+                bb_sd[k[len("backbone."):]] = v
+            elif k.startswith("proj_head."):
+                ph_sd[k[len("proj_head."):]] = v
             else:
-                sd_clean[k] = v
-        missing, unexpected = backbone.load_state_dict(sd_clean, strict=False)
-        if unexpected:
-            print(f"[load] Unexpected keys ({len(unexpected)}): "
-                  f"{unexpected[:5]}...")
+                # ignore unknown keys (e.g. optimiser leftovers)
+                pass
+        backbone.load_state_dict(bb_sd, strict=False)
+        ph_missing, ph_unexpected = proj_head.load_state_dict(ph_sd, strict=False)
+        if ph_missing or ph_unexpected:
+            print(f"[load] ProjectionHead missing={len(ph_missing)} "
+                  f"unexpected={len(ph_unexpected)}")
         print(
-            f"[load] Loaded LoRA-HF checkpoint "
-            f"(epoch {ckpt.get('epoch', '?')})"
+            f"[load] Loaded Phase-1 checkpoint "
+            f"(epoch {ckpt.get('epoch', '?')}, proj_dim={proj_dim})"
         )
+
+        class _Phase1Model(torch.nn.Module):
+            def __init__(self, backbone, proj_head, proj_dim):
+                super().__init__()
+                self.backbone = backbone
+                self.proj_head = proj_head
+                self.patch_size = backbone.patch_size
+                self.embed_dim = proj_dim
+            def forward(self, x):
+                with torch.no_grad():
+                    feats = self.backbone(x)
+                return self.proj_head(feats)
+            @torch.no_grad()
+            def get_patch_coords(self, H, W):
+                return self.backbone.get_patch_coords(H, W)
+
+        return _Phase1Model(backbone, proj_head, proj_dim).to(device).eval()
+
+    # ---- LoRA path (existing behaviour). ----
+    inject_lora_hf(
+        backbone.hf_model,
+        rank=args.lora_rank,
+        alpha=args.lora_alpha,
+        target_modules=tuple(args.lora_targets),
+    )
+    sd_clean = {}
+    for k, v in sd.items():
+        if k.startswith("backbone."):
+            sd_clean[k[len("backbone."):]] = v
+        else:
+            sd_clean[k] = v
+    missing, unexpected = backbone.load_state_dict(sd_clean, strict=False)
+    if unexpected:
+        print(f"[load] Unexpected keys ({len(unexpected)}): "
+              f"{unexpected[:5]}...")
+    print(
+        f"[load] Loaded LoRA-HF checkpoint "
+        f"(epoch {ckpt.get('epoch', '?')})"
+    )
     return backbone.to(device).eval()
 
 
