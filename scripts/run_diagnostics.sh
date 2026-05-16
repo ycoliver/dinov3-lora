@@ -22,8 +22,10 @@
 #   MIDDLE_WEIGHTS_DIR      $PROJECT_ROOT/dinov3_weights/dinov3-middle
 #   SMALL_CKPT              $PROJECT_ROOT/output/navi_small/lora_ckpt/checkpoint_latest.pth
 #   MIDDLE_CKPT             $PROJECT_ROOT/output/navi_middle/lora_ckpt/checkpoint_latest.pth
-#   IMAGE_DIR               $PROJECT_ROOT/datasets/test/navi_resized
-#   PCA_IMAGE               (默认: 自动从 IMAGE_DIR 取第一张找到的 .jpg)
+#   IMAGE_DIR               $PROJECT_ROOT/datasets/navi_v1.5
+#   PAIRS_FILE              $PROJECT_ROOT/datasets/navi_test_pairs.txt
+#                           (用于 PCA / features 自动挑选样本图；优先于 IMAGE_DIR 递归查找)
+#   PCA_IMAGE               (默认: 从 PAIRS_FILE 第一行解析第一张可用图)
 #   LAST_EPOCH_TAG          默认 014  (即 epoch014/eval/evaluation_pairs.csv)
 #
 # 用法示例:
@@ -46,7 +48,8 @@ SMALL_WEIGHTS_DIR="${SMALL_WEIGHTS_DIR:-$PROJECT_ROOT/dinov3_weights/dinov3-smal
 MIDDLE_WEIGHTS_DIR="${MIDDLE_WEIGHTS_DIR:-$PROJECT_ROOT/dinov3_weights/dinov3-middle}"
 SMALL_CKPT="${SMALL_CKPT:-$PROJECT_ROOT/output/navi_small/lora_ckpt/checkpoint_latest.pth}"
 MIDDLE_CKPT="${MIDDLE_CKPT:-$PROJECT_ROOT/output/navi_middle/lora_ckpt/checkpoint_latest.pth}"
-IMAGE_DIR="${IMAGE_DIR:-$PROJECT_ROOT/datasets/test/navi_resized}"
+IMAGE_DIR="${IMAGE_DIR:-$PROJECT_ROOT/datasets/navi_v1.5}"
+PAIRS_FILE="${PAIRS_FILE:-$PROJECT_ROOT/datasets/navi_test_pairs.txt}"
 PCA_IMAGE="${PCA_IMAGE:-}"
 LAST_EPOCH_TAG="${LAST_EPOCH_TAG:-014}"
 NUM_IMAGES="${NUM_IMAGES:-30}"
@@ -99,14 +102,35 @@ require_file() {
     return 0
 }
 
+# Resolve a usable image path, in priority order:
+#   1) explicit --image / $PCA_IMAGE
+#   2) first valid path appearing in $PAIRS_FILE  (joined with $IMAGE_DIR if relative)
+#   3) recursive find under $IMAGE_DIR
 resolve_pca_image() {
     if [[ -n "$PCA_IMAGE" ]]; then
         [[ -f "$PCA_IMAGE" ]] || abort "PCA_IMAGE not found: $PCA_IMAGE"
         echo "$PCA_IMAGE"; return
     fi
+
+    # ── (2) try pairs file ────────────────────────────────────────
+    if [[ -f "$PAIRS_FILE" ]]; then
+        # Each non-empty line is whitespace-separated; take the first 2 fields
+        # (img_a, img_b) of the first non-comment line. Fields can be relative.
+        local cand
+        cand=$(awk 'NF && $1 !~ /^#/ {print $1; print $2; exit}' "$PAIRS_FILE" 2>/dev/null)
+        while IFS= read -r p; do
+            [[ -z "$p" ]] && continue
+            if [[ -f "$p" ]]; then echo "$p"; return; fi
+            if [[ -f "$IMAGE_DIR/$p" ]]; then echo "$IMAGE_DIR/$p"; return; fi
+            # Some pairs files store paths relative to PROJECT_ROOT
+            if [[ -f "$PROJECT_ROOT/$p" ]]; then echo "$PROJECT_ROOT/$p"; return; fi
+        done <<< "$cand"
+    fi
+
+    # ── (3) recursive find ────────────────────────────────────────
     local img
     img=$(find "$IMAGE_DIR" -type f \( -iname '*.jpg' -o -iname '*.png' -o -iname '*.jpeg' \) 2>/dev/null | head -n 1)
-    [[ -n "$img" ]] || abort "No image found under $IMAGE_DIR. Pass --image <path> or set PCA_IMAGE."
+    [[ -n "$img" ]] || abort "No image found via PAIRS_FILE=$PAIRS_FILE or under IMAGE_DIR=$IMAGE_DIR. Pass --image <path>."
     echo "$img"
 }
 
