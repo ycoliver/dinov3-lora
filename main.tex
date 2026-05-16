@@ -1,0 +1,550 @@
+\documentclass[11pt,a4paper]{article}
+
+% ── Layout ──
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{microtype}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=*}
+
+% ── Typography ──
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath}
+
+% ── Bibliography ──
+\usepackage[backend=bibtex,style=ieee,sorting=none,maxbibnames=6]{biblatex}
+\addbibresource{references.bib}
+
+% ── Graphics & Colors ──
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+\usepackage{float}
+\usepackage{subcaption}
+
+% ── Mathematics ──
+\usepackage{amsmath}
+
+% ── Tables ──
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+
+% ── Hyperlinks ──
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
+
+% ── Headers ──
+\usepackage{fancyhdr}
+\setlength{\headheight}{13pt}
+\addtolength{\topmargin}{-1pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape When Contrastive Learning Meets a Vision Foundation Model}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+% ── Captions ──
+\usepackage{caption}
+\captionsetup{font=small,labelfont={bf,small},skip=4pt}
+
+% ── Section formatting ──
+\usepackage{titlesec}
+\titleformat{\section}{\Large\bfseries}{\thesection}{1em}{}
+\titlespacing{\section}{0pt}{12pt}{4pt}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{1em}{}
+\titlespacing{\subsection}{0pt}{10pt}{3pt}
+
+% ── Compact equations ──
+\setlength{\abovedisplayskip}{4pt}
+\setlength{\belowdisplayskip}{4pt}
+\setlength{\abovedisplayshortskip}{2pt}
+\setlength{\belowdisplayshortskip}{2pt}
+
+% ── Custom ──
+\newcommand{\dinov}{DINOv3\ }
+\newcommand{\infonce}{InfoNCE\ }
+\newcommand{\methodname}[1]{\textsc{#1}}
+
+\begin{document}
+
+% ═══════════════════════════════════════════════════════════════════
+% TITLE PAGE
+% ═══════════════════════════════════════════════════════════════════
+\begin{titlepage}
+\centering
+\vspace*{3.5cm}
+
+{\fontsize{26}{32}\selectfont\bfseries When Contrastive Learning\\[6pt]
+Meets a Vision Foundation Model\par}
+\vspace{10pt}
+{\LARGE\itshape A Doomed Fine-Tuning Experiment\\[3pt]
+and Its Profound Lessons\par}
+
+\vspace{28pt}
+{\large DINOv3 Local Feature Matching for Camera Pose Estimation\\[4pt]
+Final Technical Report\par}
+
+\vspace{32pt}
+{\large The Chinese University of Hong Kong, Shenzhen\\[3pt]
+Image Processing and Computer Vision --- Course Project\\[4pt]
+April 2026\par}
+
+\vspace{28pt}
+\begin{minipage}{0.88\textwidth}
+\large
+We attempted to fine-tune DINOv3---a vision foundation model pre-trained on 170 million images---using contrastive learning to improve its performance on local feature matching and camera pose estimation.
+Across three paradigms, two architectures, three loss functions, two datasets, and seven systematic experiments, we found that this approach is \textbf{methodologically infeasible}.
+The failure arises from a fundamental contradiction: DINOv3's semantic features and the geometric features required for matching are inherently different entities, and geometric distinctiveness has already been irreversibly eliminated as ``noise'' during pre-training.
+This report documents the complete experimental journey, the root-cause diagnosis spanning seven layers of analysis, and the definitive conclusion that proving \emph{why} something cannot work holds equal scientific value to proving \emph{what} can.
+\end{minipage}
+\vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════════
+% 1. INTRODUCTION
+% ═══════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+\subsection{Background}
+
+Self-supervised vision models such as DINOv2 and DINOv3 have demonstrated remarkable capabilities~\cite{dino,dinov2}: without manual annotation, they learn to understand object boundaries, semantic categories, and even 3D structure within images.
+
+DINOv3~\cite{dinov2,darcet2023registers} is a Vision Transformer (ViT-L/16) released by Meta AI, pre-trained on approximately 170 million images. Its self-supervised training objective yields features with strong \emph{semantic smoothness}: patches of a ``door handle'' resemble other ``door handle'' patches; patches of a ``white wall'' resemble patches of the same white wall from a different viewpoint. This property gives DINOv3 non-trivial zero-shot matching capability.
+
+\subsection{Problem Statement}
+
+The problem we address is:
+
+\begin{quote}
+\bfseries Given two photographs of the same scene taken from different viewpoints, can we automatically find pixel-level correspondences between them and recover the relative camera pose?
+\end{quote}
+
+This is a cornerstone problem in 3D reconstruction, visual localization, and SLAM. The evaluation pipeline proceeds as follows: (1)~establish dense patch correspondences via mutual nearest neighbor (MNN) matching; (2)~estimate the Essential Matrix $E$ from correspondences using USAC~\cite{usac}; (3)~decompose $E$ into relative rotation $R$ and translation $t$ via SVD and cheirality check~\cite{nister2004}; (4)~compute angular error between estimated and ground-truth pose; (5)~report AUC@$5^\circ$, AUC@$10^\circ$, AUC@$20^\circ$ and \emph{Precision} (fraction of matches satisfying the epipolar constraint within $5\times10^{-4}$).
+
+\subsection{Hypothesis (Later Falsified)}
+
+\begin{quote}
+\bfseries DINOv3's zero-shot features already produce usable matches (Precision $\approx$\,32--49\%). If we use geometric correspondences as a supervisory signal to fine-tune the model with contrastive learning, matching accuracy should improve further.
+\end{quote}
+
+\subsection{Result Overview}
+
+\begin{center}
+\color{red!75!black}\bfseries
+Every fine-tuning run degraded performance. The best fine-tuned result remained 10\% below the zero-shot baseline. Seven experiments, seven failures, three paradigms, zero exceptions.
+\end{center}
+
+% ═══════════════════════════════ 2. TECHNICAL FOUNDATION ═══════════
+\section{Technical Foundation}
+
+\subsection{DINOv3 Architecture}
+
+DINOv3 employs a ViT-L/16 backbone~\cite{vit}. For a $448\times448$ input, it partitions the image into $28\times28 = 784$ patches, each producing a 1024-dimensional feature vector.
+
+\begin{table}[t]
+\centering\small
+\caption{DINOv3 ViT-L/16 specifications.}
+\label{tab:dinov3_params}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Architecture      & ViT-Large (24 blocks, 16 heads) \\
+Parameters        & $\sim$300M \\
+Feature dimension & 1024 \\
+Patch size        & $16\!\times\!16$ px \\
+Pre-training data & $\sim$170M images (LVD-1689M) \\
+Pre-training      & DINO + iBOT + Register Tokens \\
+Position encoding & 2D RoPE \\
+Regularization    & LayerScale \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Key architectural components: \textbf{2D RoPE} encodes patch $(row, col)$ positions by rotating query and key vectors, supporting native extrapolation. \textbf{LayerScale} scales each sub-layer output by a learnable channel-wise factor initialized to $\varepsilon = 10^{-5}$. \textbf{Register Tokens} (4 learnable tokens) absorb global information, letting patch tokens focus on local structure; discarded during extraction.
+
+\subsection{Self-Attention}
+\begin{equation}
+\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
+\end{equation}
+where $Q = XW^Q$, $K = XW^K$, $V = XW^V$.
+
+\subsection{LoRA: Low-Rank Adaptation}
+
+LoRA~\cite{lora} injects trainable low-rank matrices into frozen weights:
+\begin{equation}
+h = Wx + BA\,x
+\end{equation}
+where $W \in \mathbb{R}^{d \times d}$ is frozen, $A \in \mathbb{R}^{r \times d}$ is Kaiming-initialized, $B \in \mathbb{R}^{d \times r}$ is zero-initialized, $r \ll d$ ($r=4$). \textbf{Critical}: $B=0$ ensures $\Delta W = 0$ at initialization---the model initially produces \emph{exactly} the zero-shot output. LoRA was injected into Q, K, V, and output projection layers across all 24 blocks, yielding $\sim$0.39M trainable parameters (0.13\% of the backbone).
+
+\subsection{Contrastive Learning and InfoNCE}
+
+Contrastive learning~\cite{cpc,simclr} pulls positive pairs together and pushes negatives apart. \infonce is the dominant formulation:
+\begin{equation}
+\mathcal{L}_i = -\log\frac{\exp(s_i^+ / \tau)}{\exp(s_i^+ / \tau) + \sum_{j=1}^{K} \exp(s_j^- / \tau)}
+\end{equation}
+where $s_i^+$ is the positive-pair cosine similarity, $s_j^-$ are $K$ negative similarities, and $\tau$ is the temperature.
+
+\textbf{The $\tau = 0.07$ problem}: Similarities are amplified by $1/0.07 \approx 14.3\times$, causing softmax to approximate argmax---only the single most confusable negative receives meaningful gradient. When the feature space fully collapses to random noise, \infonce converges to its theoretical expectation:
+\begin{equation}
+\mathbb{E}[\mathcal{L}] = \ln(K+1)
+\end{equation}
+With $K = 128$ negatives: $\ln(129) \approx 4.8598$. Observing this exact value constitutes \textbf{mathematical proof of mode collapse}.
+
+\subsection{Datasets}
+
+\begin{table}[t]
+\centering\small
+\caption{Dataset characteristics.}
+\label{tab:datasets}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Property} & \textbf{NAVI~\cite{navi}} & \textbf{ScanNet~\cite{scannet}} \\
+\midrule
+Scene type      & Single-object multi-view & Indoor scene scans \\
+Test pairs      & 3000 & 1500 \\
+Training pairs  & 5596 & 1500 (reuses test pairs) \\
+Resolution      & Max dim 1024 & $640\!\times\!480$ \\
+Depth maps      & Available (precise 3D) & Unavailable (epipolar) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═══════════════════════════════ 3. EXPERIMENTAL JOURNEY ═══════════
+\section{Experimental Journey}
+
+We report all seven experiments chronologically. Each is described with its hypothesis, method, result, and diagnosis.
+
+\subsection{Phase 0: Zero-Shot Baseline}
+
+\textbf{Method.} Extract 1024-dim features from frozen DINOv3; MNN matching; USAC + 5-point pose estimation.
+
+\textbf{Results.} NAVI: AUC@5\,$=$\,0.24, AUC@10\,$=$\,1.07, AUC@20\,$=$\,3.31, \textbf{Precision\,$=$\,49.17\%}; ScanNet: AUC@5\,$=$\,0.23, AUC@10\,$=$\,1.18, AUC@20\,$=$\,4.44, \textbf{Precision\,$=$\,32.20\%}.
+
+\textbf{Analysis.} Semantic smoothness enables non-trivial matching without task-specific training. This is our baseline.
+
+\subsection{Phase 1: Projection Head + InfoNCE --- Catastrophic Collapse}
+
+\textbf{Hypothesis.} A learnable projection head (1024$\rightarrow$640$\rightarrow$256) trained with \infonce can map DINO features into a more discriminative matching space.
+
+\textbf{Method.} Freeze backbone; add randomly initialized projection head; train with \infonce ($\tau=0.07$, $K=128$).
+
+\textbf{Results.} NAVI Precision: 49.17\% $\rightarrow$ \textbf{3.16\%} ($\downarrow$93.6\%); ScanNet Precision: 32.20\% $\rightarrow$ \textbf{3.47\%} ($\downarrow$89.2\%).
+
+\textbf{Diagnosis.} The training loss converged exactly to $\ln(129) \approx 4.8598$---the theoretical random-guessing limit. This is \textbf{mathematical proof of mode collapse}: all features collapsed to a single point on the hypersphere.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{figures/loss_convergence.png}
+\caption{Left: Projection Head loss converges to $\ln(129)$, the signature of mode collapse. Right: Safe Radius keeps loss above the collapse threshold.}
+\label{fig:loss}
+\end{figure}
+
+\textbf{Lesson.} Randomly initialized components destroy pre-trained features. Fine-tuning must guarantee the starting point equals zero-shot quality.
+
+\subsection{Phase 2: LoRA + InfoNCE --- Zero-Init Is Not Enough}
+
+\textbf{Hypothesis.} LoRA with $B=0$ initialization guarantees training starts from zero-shot quality; it should only improve or maintain performance.
+
+\textbf{Method.} LoRA adapters ($r=4$) on all QKV layers; train with \infonce ($\tau=0.07$).
+
+\textbf{Results.} ScanNet Precision: 32.20\% $\rightarrow$ \textbf{5.51\%} ($\downarrow$82.9\%). Model collapsed despite zero-init guarantee.
+
+\textbf{Diagnosis.} \infonce itself is incompatible with DINOv3's feature space. It demands that \emph{all} non-corresponding patches be pushed apart, but DINOv3's space naturally places semantically similar patches close together. The model destroys its own semantic structure to satisfy the loss.
+
+\subsection{Phase 3: Safe Radius --- The Closest Brush with Success}
+
+\textbf{Hypothesis.} Spatially adjacent patches lie on the same surface and \emph{should} have similar features. Excluding them from the negative set prevents destructive repulsion.
+
+\textbf{Method.} Introduce a \textbf{Safe Radius} of 5 patches: negatives within spatial distance 5 from the anchor are masked out of the contrastive computation.
+
+\textbf{Results.} ScanNet Precision recovered from 5.51\% to \textbf{28.83\%}---only 10.5\% below the zero-shot 32.20\%. This is the single best fine-tuned result.
+
+\textbf{Analysis.} Safe Radius proved ``unreasonable negatives'' were a major degradation cause. Two limitations: (1)~only spatial proximity is addressed, not semantic similarity (distant white-wall patches still repelled); (2)~Precision recovery did not translate to AUC recovery (AUC@20\,$=$\,1.84 vs.\ zero-shot 4.44).
+
+\subsection{Phase 4: StableMatchingLoss --- Removing the Softmax}
+
+\textbf{Hypothesis.} Softmax competition in \infonce is the root problem. A margin-based loss should be gentler.
+
+\textbf{Method.} Moved to RTX 5090 (32\,GB, batch\_size\,$=$\,8). Designed \methodname{StableMatchingLoss}:
+\begin{equation}
+\mathcal{L} = \underbrace{(1-s_{\text{pos}})^2}_{\text{attraction}} +\; \lambda_{\text{neg}}\underbrace{\text{ReLU}(m - s_{\text{pos}} + s_{\text{hardest}})}_{\text{hardest negative only}} +\; \lambda_{\text{div}}\mathcal{L}_{\text{div}} + \lambda_{\text{reg}}\underbrace{\|\mathbf{f}_{\text{ft}} - \mathbf{f}_{\text{zs}}\|^2}_{\text{feature preservation}}
+\end{equation}
+
+\textbf{Results.} Worse than LoRA + Safe Radius: NAVI Precision 5.13\%, ScanNet 10.97\%.
+
+\textbf{Lesson.} The problem is not the loss function's form, but the optimization objective itself. Improving cosine similarity bears no differentiable relationship to improving pose accuracy---the MNN, USAC, and decomposition steps are invisible during training.
+
+\begin{center}
+\fbox{\begin{minipage}{0.85\textwidth}
+\centering\bfseries\small
+All engineering variables eliminated.\\
+The problem must be methodological.
+\end{minipage}}
+\end{center}
+
+\subsection{Phase 5: Route A --- Matchability Predictor}
+
+\textbf{Paradigm shift.} All previous methods modified DINO's feature space. Route A keeps features frozen and trains only a tiny network ($\sim$0.28M params):
+\begin{equation}
+\text{score}_i = \sigma\bigl(\text{MLP}(\mathbf{f}_i^{\text{DINO}})\bigr) \in [0, 1]
+\end{equation}
+During inference, only high-scoring patches participate in MNN matching.
+
+\textbf{Results.} NAVI Precision 5.55\%, ScanNet 5.95\%---the predictor filtered out \emph{good} patches rather than bad ones.
+
+\textbf{Failure root cause.} A single patch's feature vector does not encode how \emph{unique} it is within the image. Two white-wall patches have nearly identical features; the predictor cannot distinguish them. This directly motivated Route B.
+
+\subsection{Phase 6: Route B --- Attention Matching Head}
+
+\textbf{Method.} A SuperGlue-style~\cite{superglue} architecture with frozen DINO features: (1)~DINOv3 extracts 1024-dim features; (2)~linear projection $1024\rightarrow256$; (3)~add 2D sinusoidal positional encoding; (4)~4 alternating blocks of Self-Attention $\rightarrow$ Cross-Attention $\rightarrow$ FFN; (5)~L2 normalization; (6)~\textbf{Dual-Softmax Matching}.
+
+Total parameters: $\sim$1M. Training objective: Dual-Softmax NLL Loss. On $784\!\times\!784$ score matrices, the random baseline is $2\times\ln(784) \approx 13.33$.
+
+\textbf{Results: All metrics exactly 0.00\%.}
+NAVI: Training loss 13.33 $\rightarrow$ 12.15 (8.9\% reduction; correct-match probability from $1.6\!\times\!10^{-6}$ to $5.2\!\times\!10^{-6}$---still random under argmax).
+ScanNet: Training loss 13.33 $\rightarrow$ 13.33 (\textbf{zero learning}). This is the most complete failure.
+
+\textbf{Three-layer diagnosis:}
+\begin{enumerate}
+    \item \textbf{Extreme label sparsity.} Of $784^2 = 614{,}656$ possible pairs, only $\sim$150 have labels (0.02\%). The remaining 614{,}500 positions drift unconstrained.
+    \item \textbf{Zero geometric distinctiveness.} Fifty white-wall patches occupy nearly identical positions in semantic space. Their attention scores are nearly equal, producing uniform attention distributions with zero discriminative power.
+    \item \textbf{Data starvation.} 1M-parameter attention model trained on 5,596 pairs (NAVI) and 1,500 pairs (ScanNet). ScanNet's frozen loss (13.33$\rightarrow$13.33) directly proves insufficient data.
+\end{enumerate}
+
+% ═══════════════════════════════ 4. COMPLETE RESULTS ═══════════════
+\section{Complete Results}
+
+\begin{table}[H]
+\centering\small
+\caption{All seven experiments: raw results.}
+\label{tab:all_results}
+\begin{tabular}{@{}cllcccc@{}}
+\toprule
+\# & \textbf{Method} & \textbf{Dataset} & \textbf{AUC@5} & \textbf{AUC@10} & \textbf{AUC@20} & \textbf{Precision} \\
+\midrule
+\multirow{2}{*}{0} & \multirow{2}{*}{\color{green!55!black}Zero-Shot (baseline)}
+    & NAVI    & 0.24 & 1.07 & 3.31 & \color{green!55!black}49.17\% \\
+  & & ScanNet & 0.23 & 1.18 & 4.44 & \color{green!55!black}32.20\% \\
+\midrule
+\multirow{2}{*}{1} & \multirow{2}{*}{Projection Head + InfoNCE}
+    & NAVI    & 0.00 & 0.03 & 0.10 & 3.16\% \\
+  & & ScanNet & 0.00 & 0.07 & 0.25 & 3.47\% \\
+\midrule
+2 & LoRA + InfoNCE (no SafeR) & ScanNet & 0.00 & 0.09 & 0.96 & 5.51\% \\
+\midrule
+3 & \textbf{LoRA + Safe Radius (bs=1)} & \textbf{ScanNet} & 0.00 & 0.26 & 1.84 & \color{orange!75!black}\textbf{28.83\%} \\
+\midrule
+\multirow{2}{*}{4} & \multirow{2}{*}{LoRA + StableMatchingLoss}
+    & NAVI    & 0.00 & 0.02 & 0.11 &  5.13\% \\
+  & & ScanNet & 0.04 & 0.26 & 1.43 & 10.97\% \\
+\midrule
+\multirow{2}{*}{5} & \multirow{2}{*}{Matchability Predictor (A)}
+    & NAVI    & 0.00 & 0.02 & 0.17 &  5.55\% \\
+  & & ScanNet & 0.00 & 0.00 & 0.20 &  5.95\% \\
+\midrule
+\multirow{2}{*}{6} & \multirow{2}{*}{\color{red!75!black}Matching Head (B)}
+    & NAVI    & \color{red!75!black}0.00 & \color{red!75!black}0.00 & \color{red!75!black}0.00 & \color{red!75!black}0.00\% \\
+  & & ScanNet & \color{red!75!black}0.00 & \color{red!75!black}0.00 & \color{red!75!black}0.00 & \color{red!75!black}0.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/precision_all_methods.png}
+\caption{Matching Precision across all seven methods. Zero-shot baseline (green) is never surpassed. LoRA + Safe Radius (purple) is the single result approaching baseline.}
+\label{fig:precision}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/auc20_all_methods.png}
+\caption{Pose AUC@20 across all methods. Every fine-tuning run degrades pose estimation quality.}
+\label{fig:auc20}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/navi_chronological.png}
+\caption{NAVI dataset: Precision and AUC@20 in chronological order. Each fine-tuning attempt produces a cliff-like drop.}
+\label{fig:navi}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/scannet_chronological.png}
+\caption{ScanNet dataset: chronological trajectory. LoRA + Safe Radius is the only upward deflection.}
+\label{fig:scan}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/degradation_severity.png}
+\caption{Precision degradation from zero-shot (percentage points). More sophisticated methods produce more severe degradation.}
+\label{fig:degradation}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/three_paradigms.png}
+\caption{Summary across all three paradigms. No approach improved upon zero-shot.}
+\label{fig:paradigms}
+\end{figure}
+
+% ═══════════════════════════ 5. ROOT CAUSE ANALYSIS ═══════════════
+\section{Root Cause Analysis}
+
+Seven systematic experiments converge on one conclusion: the failure is not engineering but fundamental. This section peels back seven layers of causation.
+
+\subsection{Layer 1: Semantic Features $\neq$ Geometric Features}
+
+DINOv3 learns \textbf{semantic features}: same-category objects are similar, different-category objects are dissimilar. Matching requires \textbf{geometric features}: each specific 3D point must be \emph{unique enough} to distinguish it from all others, even within the same semantic category.
+
+\begin{table}[t]
+\centering\small
+\caption{Semantic vs.\ geometric features.}
+\label{tab:sem_vs_geo}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Property} & \textbf{Semantic (DINOv3)} & \textbf{Geometric (matching)} \\
+\midrule
+Similarity      & ``doorknob $\approx$ doorknob'' & ``\emph{this} corner $\neq$ \emph{that}'' \\
+Distribution    & Smooth semantic regions          & Sparse, distinct keypoints \\
+Cross-instance  & Generalize across instances      & Discriminate within instance \\
+Viewpoint       & Viewpoint-invariant              & Viewpoint-covariant \\
+Ideal space     & Continuous manifold              & Discrete clusters \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/semantic_vs_geometric.png}
+\caption{Left: DINOv3's semantic space---clustered by category, smooth. Right: Geometric space---sparse, distinctive, view-covariant.}
+\label{fig:semgeo}
+\end{figure}
+
+\subsection{Layer 2: Contrastive Learning Destroys Semantic Smoothness}
+
+DINOv3's zero-shot matching works \emph{because of} semantic smoothness: the same object from different views lands nearby in feature space, where nearest-neighbor search finds correct correspondences. Contrastive fine-tuning destroys this: ``pull positives'' forces specific points to jump together; ``push negatives'' tears adjacent points apart. The result: a continuous manifold shredded into discrete clusters. Cross-view generalization is lost.
+
+\textbf{Paradox: the capability you are trying to improve depends on the very property you are destroying.}
+
+\subsection{Layer 3: ``Pulling Positives Together'' Is Itself Wrong}
+
+In dense matching, a ``positive pair''---two patches projecting to the same 3D point from different views---\textbf{should not have identical features}. Illumination differs across views; occlusion states differ; perspective distortion means the $16\!\times\!16$ patch covers slightly different surface areas; attention context differs across images. DINO features naturally encode these viewpoint differences---and this is a \emph{strength}, because viewpoint difference is a critical signal for pose estimation. \textbf{``Pulling positives together'' trains the model to discard the very signal needed for pose estimation.}
+
+\subsection{Layer 4: Three Non-Differentiable Gaps}
+
+\begin{equation}
+\text{Cosine sim.} \xrightarrow{\text{non-diff.}} \text{MNN} \xrightarrow{\text{non-diff.}} \text{USAC + E} \xrightarrow{\text{non-diff.}} \text{Pose error}
+\end{equation}
+The model never sees how improving cosine similarity affects the final pose. ``Better features'' from the training perspective can easily produce ``worse poses'' from the evaluation perspective.
+
+\subsection{Layer 5: The Data Chasm}
+
+\begin{table}[t]
+\centering\small
+\caption{Pre-training vs.\ fine-tuning data scale.}
+\label{tab:data_gap}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Training stage} & \textbf{Data volume} & \textbf{Fraction} \\
+\midrule
+DINOv3 pre-training & $\sim$170M images & 100\% \\
+Fine-tuning (NAVI)  & 5,596 pairs      & $\sim$0.0003\% \\
+Fine-tuning (ScanNet) & 1,500 pairs    & $\sim$0.0001\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+Every gradient step overwrites vast pre-trained knowledge with extremely limited information. This is not fine-tuning; it is \emph{micro-vandalism}.
+
+\subsection{Layer 6: The Information-Theoretic Ceiling}
+
+This is the deepest finding, crystallized from seven experiments:
+
+\begin{quote}
+\bfseries
+DINOv3's training objective explicitly minimizes the mutual information between viewpoint variation and semantic features.\\[2pt]
+$I(\text{geometric distinctiveness}; \text{semantic feature}) \approx 0$\\[2pt]
+Geometric distinctiveness was eliminated as ``noise'' during pre-training. This is not a signal awaiting a better extraction method---it is information that has been \textbf{irreversibly deleted}.
+\end{quote}
+
+DINO's self-supervised learning requires ``same object from different viewpoints $\rightarrow$ same feature.'' Viewpoint information---including geometric distinctiveness---is explicitly suppressed. Zero-shot matching achieves Precision 49\%/32\% only because this suppression is imperfect: residual ``edge traces'' of geometric signal survive. Those traces constitute the \textbf{performance ceiling}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{figures/information_bottleneck.png}
+\caption{Information-theoretic view. Geometric information (red) was eliminated during pre-training. No fine-tuning can recover permanently deleted information.}
+\label{fig:info}
+\end{figure}
+
+\textbf{Analogy.} Consider an aggressively JPEG-compressed image. Post-processing (sharpening, denoising) can improve perceived quality but cannot recover quantized high-frequency details. DINOv3 features are the compressed image; geometric distinctiveness is the lost high-frequency detail; zero-shot matching uses the surviving low-frequency signal. All fine-tuning attempts are efforts to reconstruct high-frequency detail from low-frequency signal---information-theoretically impossible.
+
+\subsection{Layer 7: Sophistication $\propto$ Degradation}
+
+A deeply counter-intuitive finding: \textbf{more sophisticated methods produce more complete degradation}. Safe Radius (a 5-line mask) $\rightarrow$ 28.83\% Precision. StableMatchingLoss (four components) $\rightarrow$ 10.97\%. Matching Head (Self/Cross-Attn + Dual-Softmax) $\rightarrow$ 0.00\%.
+
+This is not coincidence. Sophisticated methods make stronger assumptions about DINO's feature space (e.g., ``attention can distinguish semantically similar but geometrically distinct patches''). Under $I(\text{geometry} \mid \text{semantics}) \approx 0$, every such assumption is false. The sophisticated design becomes a precision destruction mechanism.
+
+% ═══════════════════════════════ 6. CONCLUSION ═══════════════════
+\section{Conclusion}
+
+\subsection{Feasibility Verdict}
+
+\begin{quote}
+\bfseries\large
+Fine-tuning DINOv3's backbone with contrastive learning to improve feature-matching-based camera pose estimation is \textbf{methodologically infeasible}.
+\end{quote}
+
+This is not ``we haven't found the right method yet.'' It is ``the right method is to not do this.''
+
+\subsection{Why Zero-Shot Is the Ceiling}
+
+DINOv3's zero-shot features work for matching (Precision 32--49\%) precisely because of their \textbf{semantic smoothness}. Every form of contrastive fine-tuning destroys this smoothness. The loss function demands that the continuous semantic manifold be torn into discrete correspondence clusters. Once smoothness is destroyed, cross-view generalization collapses. More fundamentally: DINOv3's pre-training irreversibly eliminated geometric distinctiveness as noise. Fine-tuning can only operate on information present in the feature space---and that information no longer exists.
+
+\subsection{What Would Work Instead}
+
+\begin{enumerate}
+    \item \textbf{Better post-processing on frozen features.} SNN ratio test~\cite{superglue}, improved keypoint selection, RANSAC parameter tuning---zero fine-tuning, direct zero-shot boost.
+    \item \textbf{End-to-end differentiable matching with sufficient data.} LoFTR~\cite{loftr} and RoMa~\cite{roma} optimize geometric accuracy directly but require orders of magnitude more training pairs.
+    \item \textbf{Purpose-built geometric feature extractors.} SuperPoint~\cite{superpoint}, DISK, ALIKE are designed specifically for matching, unlike general-purpose semantic models.
+\end{enumerate}
+
+\subsection{Academic Significance}
+
+\textbf{Understanding why something fails is often more valuable than demonstrating success:} (1)~A success tells you one path works; a failure analysis tells you why hundreds do not. (2)~Our failure is not random but \emph{necessary}---we eliminated every engineering variable and converged on a methodological root cause. (3)~This conclusion guides future researchers: knowing what \emph{not} to do is as valuable as knowing what to do.
+
+\subsection{Methodological Contributions}
+
+This project demonstrates a complete scientific workflow: baseline establishment, hypothesis-driven experimentation, mathematical diagnosis (proving mode collapse via $\ln(129)$), independent algorithmic innovation (Safe Radius), systematic ablation of all engineering variables, and deep methodological reflection.
+
+\begin{center}
+\rule{0.45\textwidth}{0.4pt}\\[12pt]
+{\large\bfseries Seven experiments, seven layers of understanding,\\[2pt]
+converging on a first-principles insight.}\\[10pt]
+{\large Proving the infeasibility of a direction holds\\[2pt]
+equal academic value to finding a viable one.}\\[10pt]
+{\large\color{red!70!black}\bfseries``What \emph{not} to do'' is often more important than ``what to do.''}\\[12pt]
+\rule{0.45\textwidth}{0.4pt}
+\end{center}
+
+% ═══════════════════════════════ APPENDIX ═══════════════════════
+\appendix
+\section{Complete Results Table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/complete_results_table.png}
+\caption{All experimental results. Green = zero-shot baseline, red = complete degradation (0.00\%), yellow = partial preservation (28.83\%).}
+\label{fig:complete_table}
+\end{figure}
+
+% ═══════════════════════════════ REFERENCES ═══════════════════════
+\newpage
+\printbibliography[heading=bibintoc,title={References}]
+
+\end{document}

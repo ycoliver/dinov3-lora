@@ -1,3 +1,0 @@
-Evaluation Results (mean over 1500 pairs):
-AUC@5	 AUC@10	 AUC@20	 Prec	
-0.23	 1.18	 4.44	 32.20	

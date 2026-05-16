@@ -315,9 +315,8 @@ echo "[7/7] Per-epoch evaluation → $EVAL_PER_EPOCH"
 echo "      EVAL_START_EPOCH=$EVAL_START_EPOCH  EVAL_FORCE=$EVAL_FORCE"
 mkdir -p "$EVAL_PER_EPOCH"
 
-if [ ! -f "$SUMMARY_TSV" ]; then
-    echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
-fi
+# summary.tsv is rebuilt from scratch at the end of this step by
+# scripts/build_eval_summary.py — no need to seed a header here.
 
 shopt -s nullglob
 CKPT_LIST=( "$OUT_LORA"/checkpoint_epoch*.pth )
@@ -388,53 +387,13 @@ else
             }
     done
 
-    # Rebuild summary.tsv from every existing per-epoch result file.
+    # Rebuild summary.tsv from every existing per-epoch result file via the
+    # dedicated helper script (JSON-aware, missing fields → '-').
     echo ""
     echo "  Rebuilding summary.tsv from existing per-epoch results..."
-    echo -e "epoch\tauc@5\tauc@10\tauc@20\tprecision\trecall" > "$SUMMARY_TSV"
-    shopt -s nullglob
-    # Prefer .json results (newer); pick up legacy .txt-only epochs as well.
-    declare -A SEEN_EPOCHS=()
-    EP_RES_FILES=()
-    for EP_RES in "$EVAL_PER_EPOCH"/epoch*/eval/evaluation_results.json; do
-        EP_TAG=$(basename "$(dirname "$(dirname "$EP_RES")")")
-        SEEN_EPOCHS["$EP_TAG"]=1
-        EP_RES_FILES+=( "$EP_RES" )
-    done
-    for EP_RES in "$EVAL_PER_EPOCH"/epoch*/eval/evaluation_results.txt; do
-        EP_TAG=$(basename "$(dirname "$(dirname "$EP_RES")")")
-        if [ -z "${SEEN_EPOCHS[$EP_TAG]:-}" ]; then
-            EP_RES_FILES+=( "$EP_RES" )
-        fi
-    done
-    for EP_RES in "${EP_RES_FILES[@]}"; do
-        EP_TAG=$(basename "$(dirname "$(dirname "$EP_RES")")")
-        EP_TAG="${EP_TAG#epoch}"
-        $PY - "$EP_RES" "$EP_TAG" "$SUMMARY_TSV" <<'PY'
-import re, sys
-res_path, epoch_tag, summary_path = sys.argv[1:4]
-text = open(res_path, "r", errors="ignore").read()
-
-def grab(pattern, default="-"):
-    m = re.search(pattern, text, re.IGNORECASE)
-    return m.group(1) if m else default
-
-auc5  = grab(r"AUC@5[^0-9\-]*([0-9.]+)")
-auc10 = grab(r"AUC@10[^0-9\-]*([0-9.]+)")
-auc20 = grab(r"AUC@20[^0-9\-]*([0-9.]+)")
-prec  = grab(r"Precision[^0-9\-]*([0-9.]+)")
-rec   = grab(r"Recall[^0-9\-]*([0-9.]+)")
-
-with open(summary_path, "a") as f:
-    f.write(f"{epoch_tag}\t{auc5}\t{auc10}\t{auc20}\t{prec}\t{rec}\n")
-PY
-    done
-    shopt -u nullglob
-
-    echo ""
-    echo "  Per-epoch summary written to: $SUMMARY_TSV"
-    echo "  ──────── summary preview ────────"
-    column -t -s $'\t' "$SUMMARY_TSV" || cat "$SUMMARY_TSV"
+    $PY "$SCRIPT_DIR/build_eval_summary.py" "$EVAL_PER_EPOCH" "$SUMMARY_TSV" || {
+        echo "  [warn] build_eval_summary.py exited non-zero (no usable results yet?)"
+    }
 fi
 else
     echo ""
