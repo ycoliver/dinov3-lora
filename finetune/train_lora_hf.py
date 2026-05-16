@@ -391,6 +391,9 @@ def main():
         num_workers=args.num_workers,
         collate_fn=collate_matching_pairs,
         drop_last=True,
+        pin_memory=True,
+        persistent_workers=(args.num_workers > 0),
+        prefetch_factor=(4 if args.num_workers > 0 else None),
     )
 
     # Loss

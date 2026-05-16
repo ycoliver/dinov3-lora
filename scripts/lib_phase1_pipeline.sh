@@ -73,6 +73,7 @@ IMG_SIZE=${IMG_SIZE:-448}
 BATCH_SIZE=${BATCH_SIZE:-8}
 LR=${LR:-1e-4}
 PROJ_DIM=${PROJ_DIM:-256}
+NUM_WORKERS=${NUM_WORKERS:-4}
 
 # NAVI-only data paths
 TRAIN_PAIRS="finetune/navi_train_pairs.txt"
@@ -108,6 +109,7 @@ echo "  Img size     : $IMG_SIZE"
 echo "  Batch size   : $BATCH_SIZE"
 echo "  LR           : $LR"
 echo "  Proj dim     : $PROJ_DIM"
+echo "  Num workers  : $NUM_WORKERS"
 echo "  Steps        : ${START_STEP}..${END_STEP}"
 if [ "$START_STEP" -le 5 ] && [ "$END_STEP" -ge 5 ]; then
 echo "  Eval resume  : start_epoch=$EVAL_START_EPOCH  force=$EVAL_FORCE"
@@ -174,6 +176,7 @@ $PY -m finetune.train_lora_hf \
     --batch_size "$BATCH_SIZE" \
     --lr "$LR" \
     --img_size "$IMG_SIZE" \
+    --num_workers "$NUM_WORKERS" \
     --no_hard_negatives
 else
     echo ""
