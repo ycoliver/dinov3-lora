@@ -1,0 +1,93 @@
+\begin{thebibliography}{13}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Caron et~al.(2021)Caron, Touvron, Misra, J{\'e}gou, Mairal,
+  Bojanowski, and Joulin]{dino}
+Mathilde Caron, Hugo Touvron, Ishan Misra, Herv{\'e} J{\'e}gou, Julien Mairal,
+  Piotr Bojanowski, and Armand Joulin.
+\newblock Emerging properties in self-supervised vision transformers.
+\newblock In \emph{International Conference on Computer Vision (ICCV)}, 2021.
+
+\bibitem[Chen et~al.(2020)Chen, Kornblith, Norouzi, and Hinton]{simclr}
+Ting Chen, Simon Kornblith, Mohammad Norouzi, and Geoffrey Hinton.
+\newblock A simple framework for contrastive learning of visual
+  representations.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2020.
+
+\bibitem[Darcet et~al.(2023)Darcet, Oquab, Mairal, and
+  Bojanowski]{darcet2023registers}
+Timoth{\'e}e Darcet, Maxime Oquab, Julien Mairal, and Piotr Bojanowski.
+\newblock Vision transformers need registers.
+\newblock \emph{arXiv preprint arXiv:2309.16588}, 2023.
+
+\bibitem[DeTone et~al.(2018)DeTone, Malisiewicz, and Rabinovich]{superpoint}
+Daniel DeTone, Tomasz Malisiewicz, and Andrew Rabinovich.
+\newblock Superpoint: Self-supervised interest point detection and description.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR) Workshops}, 2018.
+
+\bibitem[Edstedt et~al.(2024)Edstedt, Sun, B{\"o}kman, Wadenb{\"a}ck, and
+  Felsberg]{roma}
+Johan Edstedt, Qiyu Sun, Georg B{\"o}kman, M{\aa}rten Wadenb{\"a}ck, and
+  Michael Felsberg.
+\newblock Roma: Robust dense feature matching.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2024.
+
+\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen]{lora}
+Edward~J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+  Wang, Lu Wang, and Weizhu Chen.
+\newblock Lora: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Nist{\'e}r(2004)]{nister2004}
+David Nist{\'e}r.
+\newblock An efficient solution to the five-point relative pose problem.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence
+  (PAMI)}, 2004.
+
+\bibitem[Oquab et~al.(2023)Oquab, Darcet, Moutakanni, Vo, Szafraniec, Khalidov,
+  Fernandez, Haziza, Massa, El-Nouby, et~al.]{dinov2}
+Maxime Oquab, Timoth{\'e}e Darcet, Th{\'e}o Moutakanni, Huy~V. Vo, Marc
+  Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel Haziza, Francisco Massa,
+  Alaaeldin El-Nouby, et~al.
+\newblock Dinov2: Learning robust visual features without supervision.
+\newblock \emph{arXiv preprint arXiv:2304.07193}, 2023.
+
+\bibitem[Raguram et~al.(2013)Raguram, Chum, Pollefeys, Matas, and Frahm]{usac}
+Rahul Raguram, Ond{\v{r}}ej Chum, Marc Pollefeys, Ji{\v{r}}{\'\i} Matas, and
+  Jan-Michael Frahm.
+\newblock Usac: A universal framework for random sample consensus.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence
+  (PAMI)}, 2013.
+
+\bibitem[Research()]{navi}
+Google Research.
+\newblock Navi dataset.
+\newblock \url{https://github.com/google/navi}.
+
+\bibitem[Sarlin et~al.(2020)Sarlin, DeTone, Malisiewicz, and
+  Rabinovich]{superglue}
+Paul-Edouard Sarlin, Daniel DeTone, Tomasz Malisiewicz, and Andrew Rabinovich.
+\newblock Superglue: Learning feature matching with graph neural networks.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2020.
+
+\bibitem[Sun et~al.(2021)Sun, Shen, Wang, Bao, and Zhou]{loftr}
+Jiaming Sun, Zehong Shen, Yuang Wang, Hujun Bao, and Xiaowei Zhou.
+\newblock Loftr: Detector-free local feature matching with transformers.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2021.
+
+\bibitem[van~den Oord et~al.(2018)van~den Oord, Li, and Vinyals]{cpc}
+Aaron van~den Oord, Yazhe Li, and Oriol Vinyals.
+\newblock Representation learning with contrastive predictive coding.
+\newblock \emph{arXiv preprint arXiv:1807.03748}, 2018.
+
+\end{thebibliography}

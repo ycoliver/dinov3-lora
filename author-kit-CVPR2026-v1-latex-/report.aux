@@ -1,0 +1,99 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{dino}
+\citation{dinov2}
+\citation{darcet2023registers}
+\citation{navi}
+\@writefile{toc}{\contentsline {section}{\numberline {1}\hskip -1em.~Introduction}{1}{section.1}\protected@file@percent }
+\newlabel{sec:intro}{{1}{1}{\texorpdfstring {\hskip -1em.~}{}Introduction}{section.1}{}}
+\newlabel{sec:intro@cref}{{[section][1][]1}{[1][1][]1}{}{}{}}
+\citation{dino,dinov2,darcet2023registers}
+\citation{darcet2023registers}
+\citation{lora}
+\citation{superpoint}
+\citation{superglue}
+\citation{loftr}
+\citation{roma}
+\citation{cpc,simclr}
+\@writefile{toc}{\contentsline {paragraph}{Contributions.}{2}{section*.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}\hskip -1em.~Related Work}{2}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Self-supervised vision foundation models.}{2}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Parameter-efficient fine-tuning.}{2}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Local feature matching and camera pose.}{2}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Contrastive learning.}{2}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}\hskip -1em.~Method}{2}{section.3}\protected@file@percent }
+\newlabel{sec:method}{{3}{2}{\texorpdfstring {\hskip -1em.~}{}Method}{section.3}{}}
+\newlabel{sec:method@cref}{{[section][3][]3}{[1][2][]2}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}\hskip -1em.~LoRA on Q and V}{2}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}\hskip -1em.~HardInfoNCE with Safe Radius}{2}{subsection.3.2}\protected@file@percent }
+\citation{superglue}
+\citation{usac}
+\citation{nister2004}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}\hskip -1em.~Ground-truth correspondences from NAVI}{3}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}\hskip -1em.~Training recipe}{3}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}\hskip -1em.~Experiments}{3}{section.4}\protected@file@percent }
+\newlabel{sec:results}{{4}{3}{\texorpdfstring {\hskip -1em.~}{}Experiments}{section.4}{}}
+\newlabel{sec:results@cref}{{[section][4][]4}{[1][3][]3}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}\hskip -1em.~Dataset and protocol}{3}{subsection.4.1}\protected@file@percent }
+\newlabel{sec:setup}{{4.1}{3}{\texorpdfstring {\hskip -1em.~}{}Dataset and protocol}{subsection.4.1}{}}
+\newlabel{sec:setup@cref}{{[subsection][1][4]4.1}{[1][3][]3}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Split.}{3}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Pairs.}{3}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Image geometry.}{3}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Pose-evaluation pipeline.}{3}{section*.9}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Scene-disjoint NAVI split used throughout the paper. Train and test partitions share no images by construction.}}{3}{table.caption.10}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:split}{{1}{3}{Scene-disjoint NAVI split used throughout the paper. Train and test partitions share no images by construction}{table.caption.10}{}}
+\newlabel{tab:split@cref}{{[table][1][]1}{[1][3][]3}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces NAVI test (908 pairs, $1024^2$ evaluation). LoRA + Safe Radius improves Precision and AUC@$20^\circ $ on both backbones. AUC@$5^\circ $ stays flat or drops, which we discuss in Sec.~\ref {sec:limits}.}}{3}{table.caption.12}\protected@file@percent }
+\newlabel{tab:final}{{2}{3}{NAVI test (908 pairs, $1024^2$ evaluation). LoRA + Safe Radius improves Precision and AUC@$20^\circ $ on both backbones. AUC@$5^\circ $ stays flat or drops, which we discuss in Sec.~\ref {sec:limits}}{table.caption.12}{}}
+\newlabel{tab:final@cref}{{[table][2][]2}{[1][3][]3}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}\hskip -1em.~Per-epoch dynamics}{3}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}\hskip -1em.~Final numerical results}{3}{subsection.4.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Per-epoch metrics on NAVI for ViT-S/16 (left) and ViT-L/16 (right). Solid: LoRA-tuned; dashed: zero-shot baseline. Both backbones cross above the zero-shot Precision baseline by epoch~3 and stabilize around $+7$ pp.}}{4}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:per_epoch}{{1}{4}{Per-epoch metrics on NAVI for ViT-S/16 (left) and ViT-L/16 (right). Solid: LoRA-tuned; dashed: zero-shot baseline. Both backbones cross above the zero-shot Precision baseline by epoch~3 and stabilize around $+7$ pp}{figure.caption.11}{}}
+\newlabel{fig:per_epoch@cref}{{[figure][1][]1}{[1][3][]4}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Aggregate representation-level diagnostics on a 30-image NAVI subset. All metrics move by $\le 0.02$ in absolute terms; the dominant signal of LoRA is \emph  {not} a redrawn feature space.}}{4}{figure.caption.14}\protected@file@percent }
+\newlabel{fig:bars}{{2}{4}{Aggregate representation-level diagnostics on a 30-image NAVI subset. All metrics move by $\le 0.02$ in absolute terms; the dominant signal of LoRA is \emph {not} a redrawn feature space}{figure.caption.14}{}}
+\newlabel{fig:bars@cref}{{[figure][2][]2}{[1][4][]4}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}\hskip -1em.~Diagnostic analysis: how much did the features actually move?}{4}{subsection.4.4}\protected@file@percent }
+\newlabel{sec:diag}{{4.4}{4}{\texorpdfstring {\hskip -1em.~}{}Diagnostic analysis: how much did the features actually move?}{subsection.4.4}{}}
+\newlabel{sec:diag@cref}{{[subsection][4][4]4.4}{[1][3][]4}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Aggregate diagnostics.}{4}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Per-image distinguishability.}{4}{section*.15}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Distribution of per-image mean intra-image patch cosine. LoRA shifts the histogram only slightly to the right.}}{4}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:hist_intra}{{3}{4}{Distribution of per-image mean intra-image patch cosine. LoRA shifts the histogram only slightly to the right}{figure.caption.16}{}}
+\newlabel{fig:hist_intra@cref}{{[figure][3][]3}{[1][4][]4}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Cosine similarity of ground-truth positive patch pairs. The two histograms are nearly indistinguishable.}}{4}{figure.caption.17}\protected@file@percent }
+\newlabel{fig:hist_pos}{{4}{4}{Cosine similarity of ground-truth positive patch pairs. The two histograms are nearly indistinguishable}{figure.caption.17}{}}
+\newlabel{fig:hist_pos@cref}{{[figure][4][]4}{[1][4][]4}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Qualitative PCA visualization.}{4}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Layer-4 pose probe (ViT-L/16).}{4}{section*.20}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces PCA-to-RGB visualization of patch tokens. Columns are nearly indistinguishable on both backbones.}}{5}{figure.caption.19}\protected@file@percent }
+\newlabel{fig:pca}{{5}{5}{PCA-to-RGB visualization of patch tokens. Columns are nearly indistinguishable on both backbones}{figure.caption.19}{}}
+\newlabel{fig:pca@cref}{{[figure][5][]5}{[1][4][]5}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Layer-4 probe on ViT-L/16. The relationship between camera-pose angle and intermediate-feature cosine is weak both before and after fine-tuning, consistent with a small projective tilt rather than a re-organisation of intermediate representations.}}{5}{figure.caption.21}\protected@file@percent }
+\newlabel{fig:layer4}{{6}{5}{Layer-4 probe on ViT-L/16. The relationship between camera-pose angle and intermediate-feature cosine is weak both before and after fine-tuning, consistent with a small projective tilt rather than a re-organisation of intermediate representations}{figure.caption.21}{}}
+\newlabel{fig:layer4@cref}{{[figure][6][]6}{[1][5][]5}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}\hskip -1em.~Limitations and Discussion}{5}{section.5}\protected@file@percent }
+\newlabel{sec:limits}{{5}{5}{\texorpdfstring {\hskip -1em.~}{}Limitations and Discussion}{section.5}{}}
+\newlabel{sec:limits@cref}{{[section][5][]5}{[1][5][]5}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}\hskip -1em.~Conclusion}{5}{section.6}\protected@file@percent }
+\bibstyle{ieeenat_fullname}
+\bibdata{../references}
+\bibcite{dino}{{1}{2021}{{Caron et~al.}}{{Caron, Touvron, Misra, J{\'e}gou, Mairal, Bojanowski, and Joulin}}}
+\bibcite{simclr}{{2}{2020}{{Chen et~al.}}{{Chen, Kornblith, Norouzi, and Hinton}}}
+\bibcite{darcet2023registers}{{3}{2023}{{Darcet et~al.}}{{Darcet, Oquab, Mairal, and Bojanowski}}}
+\bibcite{superpoint}{{4}{2018}{{DeTone et~al.}}{{DeTone, Malisiewicz, and Rabinovich}}}
+\bibcite{roma}{{5}{2024}{{Edstedt et~al.}}{{Edstedt, Sun, B{\"o}kman, Wadenb{\"a}ck, and Felsberg}}}
+\bibcite{lora}{{6}{2022}{{Hu et~al.}}{{Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and Chen}}}
+\bibcite{nister2004}{{7}{2004}{{Nist{\'e}r}}{{}}}
+\bibcite{dinov2}{{8}{2023}{{Oquab et~al.}}{{Oquab, Darcet, Moutakanni, Vo, Szafraniec, Khalidov, Fernandez, Haziza, Massa, El-Nouby, et~al.}}}
+\bibcite{usac}{{9}{2013}{{Raguram et~al.}}{{Raguram, Chum, Pollefeys, Matas, and Frahm}}}
+\bibcite{navi}{{10}{}{{Research}}{{}}}
+\bibcite{superglue}{{11}{2020}{{Sarlin et~al.}}{{Sarlin, DeTone, Malisiewicz, and Rabinovich}}}
+\bibcite{loftr}{{12}{2021}{{Sun et~al.}}{{Sun, Shen, Wang, Bao, and Zhou}}}
+\bibcite{cpc}{{13}{2018}{{van~den Oord et~al.}}{{van~den Oord, Li, and Vinyals}}}
+\gdef \@abspage@last{6}
